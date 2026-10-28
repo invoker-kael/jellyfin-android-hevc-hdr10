@@ -145,6 +145,11 @@ public class ServerConfiguration : BaseApplicationConfiguration
     public int MinResumeDurationSeconds { get; set; } = 300;
 
     /// <summary>
+    /// Gets or sets a value indicating whether Android clients should automatically detect HDR10 support by default.
+    /// </summary>
+    public bool EnableAndroidHdr10AutoDetection { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets the minimum minutes of a book that must be played in order for playstate to be updated.
     /// </summary>
     /// <value>The min resume in minutes.</value>
