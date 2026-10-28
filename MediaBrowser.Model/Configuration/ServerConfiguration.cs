@@ -145,7 +145,7 @@ public class ServerConfiguration : BaseApplicationConfiguration
     public int MinResumeDurationSeconds { get; set; } = 300;
 
     /// <summary>
-    /// Gets or sets a value indicating whether Android clients should automatically detect HDR10 support by default.
+    /// Gets or sets whether Android clients automatically detect supported HDR video range types by default.
     /// </summary>
     public bool EnableAndroidHdr10AutoDetection { get; set; } = true;
 
