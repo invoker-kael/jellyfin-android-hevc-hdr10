@@ -193,7 +193,14 @@ namespace Jellyfin.Server
                     {
                         FileProvider = new PhysicalFileProvider(_serverConfigurationManager.ApplicationPaths.WebPath),
                         RequestPath = "/web",
-                        ContentTypeProvider = extensionProvider
+                        ContentTypeProvider = extensionProvider,
+                        OnPrepareResponse = static context =>
+                        {
+                            if (context.File.Name is "index.html" or "serviceworker.js")
+                            {
+                                context.Context.Response.Headers["Cache-Control"] = "no-cache";
+                            }
+                        }
                     });
 
                     mainApp.UseRobotsRedirection();
