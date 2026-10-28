@@ -8,7 +8,7 @@ WORKDIR /source
 COPY . .
 RUN test -n "${JELLYFIN_SERVER_COMMIT_SHA}"
 RUN dotnet test tests/Jellyfin.Model.Tests/Jellyfin.Model.Tests.csproj --configuration Release
-RUN dotnet publish Jellyfin.Server/Jellyfin.Server.csproj --configuration Release --output /publish
+RUN dotnet publish Jellyfin.Server/Jellyfin.Server.csproj --configuration Release --runtime linux-x64 --self-contained true --output /publish
 
 FROM ${JELLYFIN_BASE_IMAGE}
 
