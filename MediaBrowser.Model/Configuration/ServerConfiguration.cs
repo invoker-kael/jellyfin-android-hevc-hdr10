@@ -145,9 +145,34 @@ public class ServerConfiguration : BaseApplicationConfiguration
     public int MinResumeDurationSeconds { get; set; } = 300;
 
     /// <summary>
-    /// Gets or sets whether Android clients automatically detect supported HDR video range types by default.
+    /// Gets or sets whether Android clients automatically detect HDR10 support by default.
     /// </summary>
     public bool EnableAndroidHdr10AutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether Android clients automatically detect HLG support by default.
+    /// </summary>
+    public bool EnableAndroidHlgAutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether Android clients automatically detect Dolby Vision profile 5 support by default.
+    /// </summary>
+    public bool EnableAndroidDolbyVisionAutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether Android clients automatically detect Dolby Vision with an HDR10 base layer by default.
+    /// </summary>
+    public bool EnableAndroidDolbyVisionWithHdr10AutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether Android clients automatically detect Dolby Vision with an HLG base layer by default.
+    /// </summary>
+    public bool EnableAndroidDolbyVisionWithHlgAutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether Android clients automatically detect Dolby Vision with an SDR base layer by default.
+    /// </summary>
+    public bool EnableAndroidDolbyVisionWithSdrAutoDetection { get; set; } = true;
 
     /// <summary>
     /// Gets or sets the minimum minutes of a book that must be played in order for playstate to be updated.
