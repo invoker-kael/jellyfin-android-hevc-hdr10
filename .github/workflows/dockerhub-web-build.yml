@@ -1,0 +1,111 @@
+name: Build and publish Jellyfin Web image
+
+on:
+  push:
+    branches:
+      - codex/android-hevc-hdr10-config
+  workflow_dispatch:
+
+concurrency:
+  group: jellyfin-web-server-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out Jellyfin Server
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: server-source
+
+      - name: Check out pinned Jellyfin Web source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: invoker-kael/jellyfin-web-android-hevc-hdr10
+          ref: 0a54f15e4d1c18555717864191239a06b94514d3
+          path: web-source
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: web-source/.nvmrc
+          cache: npm
+          cache-dependency-path: web-source/package-lock.json
+
+      - name: Install Web dependencies
+        working-directory: web-source
+        run: npm ci --no-audit --no-fund
+
+      - name: Test and type-check Jellyfin Web
+        working-directory: web-source
+        run: |
+          set -euo pipefail
+          npm test
+          npm run build:check
+
+      - name: Build and verify Jellyfin Web assets
+        working-directory: web-source
+        run: |
+          set -euo pipefail
+          npm run build:production
+          test -s dist/index.html
+          test -s dist/serviceworker.js
+          test -s dist/manifest.json
+          grep -Fq 'main.jellyfin.bundle.js?' dist/index.html
+          test -n "$(find dist -type f -name '*.chunk.js' -print -quit)"
+          sha256sum dist/index.html dist/serviceworker.js
+          mkdir -p ../server-source/web-dist
+          cp -a dist/. ../server-source/web-dist/
+          test -s ../server-source/web-dist/index.html
+
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${DOCKERHUB_TOKEN:?DOCKERHUB_TOKEN secret is required}"
+          printf '%s' "$DOCKERHUB_TOKEN" | docker login --username invokerkael --password-stdin
+
+      - name: Build, inspect, and publish Jellyfin Server image
+        env:
+          SERVER_COMMIT: ${{ github.sha }}
+        working-directory: server-source
+        run: |
+          set -euo pipefail
+          WEB_COMMIT="$(git -C ../web-source rev-parse HEAD)"
+          SERVER_SHORT="$(git rev-parse --short=7 "$SERVER_COMMIT")"
+          WEB_SHORT="$(git -C ../web-source rev-parse --short=7 "$WEB_COMMIT")"
+          IMAGE="invokerkael/jellyfin-android-hevc-hdr10:12.4.0-web-${SERVER_SHORT}-${WEB_SHORT}"
+
+          docker build --pull \
+            --file deploy/Dockerfile.server \
+            --build-arg "JELLYFIN_SERVER_COMMIT_SHA=${SERVER_COMMIT}" \
+            --build-arg "JELLYFIN_WEB_COMMIT_SHA=${WEB_COMMIT}" \
+            --tag "$IMAGE" .
+
+          ACTUAL_WEB_COMMIT="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.web.revision" }}' "$IMAGE")"
+          test "$ACTUAL_WEB_COMMIT" = "$WEB_COMMIT"
+
+          CONTAINER_ID="$(docker create "$IMAGE")"
+          trap 'docker rm -f "$CONTAINER_ID"' EXIT
+          docker cp "$CONTAINER_ID:/jellyfin/jellyfin-web/index.html" "$RUNNER_TEMP/jellyfin-web-index.html"
+          docker cp "$CONTAINER_ID:/jellyfin/jellyfin-web/serviceworker.js" "$RUNNER_TEMP/jellyfin-web-serviceworker.js"
+          test -s "$RUNNER_TEMP/jellyfin-web-index.html"
+          test -s "$RUNNER_TEMP/jellyfin-web-serviceworker.js"
+          grep -Fq 'main.jellyfin.bundle.js?' "$RUNNER_TEMP/jellyfin-web-index.html"
+          docker rm -f "$CONTAINER_ID"
+          trap - EXIT
+
+          docker push "$IMAGE" 2>&1 | tee "$RUNNER_TEMP/docker-push.log"
+          IMAGE_DIGEST="$(sed -n 's/.*digest: \(sha256:[0-9a-f]*\).*/\1/p' "$RUNNER_TEMP/docker-push.log" | tail -n 1)"
+          test -n "$IMAGE_DIGEST"
+
+          {
+            printf 'Server commit: `%s`\n' "$SERVER_COMMIT"
+            printf 'Web commit: `%s`\n' "$WEB_COMMIT"
+            printf 'Image: `%s@%s`\n' "${IMAGE%:*}" "$IMAGE_DIGEST"
+          } >> "$GITHUB_STEP_SUMMARY"

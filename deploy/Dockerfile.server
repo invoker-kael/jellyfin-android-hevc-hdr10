@@ -4,16 +4,21 @@ ARG JELLYFIN_BASE_IMAGE=invokerkael/jellyfin-android-hevc-hdr10:10.10.7-android-
 FROM ${DOTNET_SDK_IMAGE} AS server-build
 
 ARG JELLYFIN_SERVER_COMMIT_SHA
+ARG JELLYFIN_WEB_COMMIT_SHA
 WORKDIR /source
 COPY . .
 RUN test -n "${JELLYFIN_SERVER_COMMIT_SHA}"
+RUN test -n "${JELLYFIN_WEB_COMMIT_SHA}"
 RUN dotnet test tests/Jellyfin.Model.Tests/Jellyfin.Model.Tests.csproj --configuration Release
 RUN dotnet publish Jellyfin.Server/Jellyfin.Server.csproj --configuration Release --runtime linux-x64 --self-contained true --output /publish
 
 FROM ${JELLYFIN_BASE_IMAGE}
 
 ARG JELLYFIN_SERVER_COMMIT_SHA
+ARG JELLYFIN_WEB_COMMIT_SHA
 LABEL org.opencontainers.image.source="https://github.com/invoker-kael/jellyfin-android-hevc-hdr10" \
       org.opencontainers.image.version="12.4.0" \
-      org.opencontainers.image.revision="${JELLYFIN_SERVER_COMMIT_SHA}"
+      org.opencontainers.image.revision="${JELLYFIN_SERVER_COMMIT_SHA}" \
+      org.opencontainers.image.web.revision="${JELLYFIN_WEB_COMMIT_SHA}"
 COPY --from=server-build /publish/ /jellyfin/
+COPY web-dist/ /jellyfin/jellyfin-web/
