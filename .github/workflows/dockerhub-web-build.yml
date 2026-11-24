@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: invoker-kael/jellyfin-web-android-hevc-hdr10
-          ref: 0a54f15e4d1c18555717864191239a06b94514d3
+          ref: 62be5aa8f65b516b9fe7fcce3454d4a989a68da3
           path: web-source
 
       - name: Set up Node.js
