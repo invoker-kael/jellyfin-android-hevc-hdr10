@@ -46,7 +46,7 @@ jobs:
           source_sha="$(git -C source rev-parse HEAD)"
           image="invokerkael/jellyfin-android-hevc-hdr10:${IMAGE_TAG}"
           docker build --pull --platform linux/amd64 --file source/deploy/Dockerfile.server --build-arg "JELLYFIN_SERVER_COMMIT_SHA=${source_sha}" --tag "${image}" source
-          server_version="$(docker run --rm --entrypoint /jellyfin/jellyfin "${image}" --version)"
+          server_version="$(docker run --rm --entrypoint /jellyfin/jellyfin "${image}" --version 2>&1)"
           case "${server_version}" in
             "Jellyfin.Server 12.4.0"*) ;;
             *)
