@@ -32,13 +32,19 @@ internal class RemoveDuplicatePlaylistChildren : IMigrationRoutine
         _playlistManager = playlistManager;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets the identifier of the migration routine.
+    /// </summary>
     public Guid Id => Guid.Parse("{96C156A2-7A13-4B3B-A8B8-FB80C94D20C0}");
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets the name of the migration routine.
+    /// </summary>
     public string Name => "RemoveDuplicatePlaylistChildren";
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets a value indicating whether the migration routine is performed on a new installation.
+    /// </summary>
     public bool PerformOnNewInstall => false;
 
     /// <inheritdoc/>

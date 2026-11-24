@@ -36,9 +36,10 @@ jobs:
       with:
         languages: ${{ matrix.language }}
         queries: +security-extended
+        build-mode: manual
 
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+    - name: Build
+      run: dotnet build Jellyfin.Server/Jellyfin.Server.csproj --configuration Release
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
