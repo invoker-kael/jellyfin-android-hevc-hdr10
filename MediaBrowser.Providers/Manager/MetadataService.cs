@@ -1426,6 +1426,8 @@ namespace MediaBrowser.Providers.Manager
             }
         }
 
+        private static bool IsYearOnlyDate(DateTime date) => date.Month == 1 && date.Day == 1;
+
         private static void MergePeople(IReadOnlyList<PersonInfo> source, IReadOnlyList<PersonInfo> target)
         {
             var sourceByName = source.ToLookup(p => p.Name.RemoveDiacritics(), StringComparer.OrdinalIgnoreCase);
