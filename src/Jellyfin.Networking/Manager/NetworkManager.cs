@@ -1011,7 +1011,6 @@ public class NetworkManager : INetworkManager, IDisposable
     private static bool SubnetContainsAddress(IPNetwork network, IPAddress address)
     {
         ArgumentNullException.ThrowIfNull(address);
-        ArgumentNullException.ThrowIfNull(network);
 
         if (address.IsIPv4MappedToIPv6)
         {
