@@ -1,0 +1,17 @@
+ARG DOTNET_SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:8.0@sha256:6ba9644da07bb5b560a402acec9ca38711a0762969f1b61da261df5c9f6f85da
+ARG JELLYFIN_BASE_IMAGE=dockerproxy.wopd.dpdns.org/nyanmisaka/jellyfin@sha256:b29e623bc37dd346ca27f8c4360fdb27aaebb9732ca0e6e2fbbe9e5033cc80b7
+
+FROM ${DOTNET_SDK_IMAGE} AS server-build
+
+ARG JELLYFIN_SERVER_COMMIT_SHA
+WORKDIR /source
+COPY . .
+RUN test -n "${JELLYFIN_SERVER_COMMIT_SHA}"
+RUN dotnet test tests/Jellyfin.Model.Tests/Jellyfin.Model.Tests.csproj --configuration Release
+RUN dotnet publish Jellyfin.Server/Jellyfin.Server.csproj --configuration Release --runtime linux-x64 --self-contained true --output /publish
+
+FROM ${JELLYFIN_BASE_IMAGE}
+
+ARG JELLYFIN_SERVER_COMMIT_SHA
+LABEL org.opencontainers.image.revision=${JELLYFIN_SERVER_COMMIT_SHA}
+COPY --from=server-build /publish/ /jellyfin/

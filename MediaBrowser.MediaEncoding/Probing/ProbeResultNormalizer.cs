@@ -236,10 +236,7 @@ namespace MediaBrowser.MediaEncoding.Probing
                     FetchFromItunesInfo(iTunXml, info);
                 }
 
-                if (data.Format is not null && !string.IsNullOrEmpty(data.Format.Duration))
-                {
-                    info.RunTimeTicks = TimeSpan.FromSeconds(double.Parse(data.Format.Duration, CultureInfo.InvariantCulture)).Ticks;
-                }
+                SetVideoRuntimeTicks(data, info);
 
                 FetchWtvInfo(info, data);
 
@@ -1235,6 +1232,62 @@ namespace MediaBrowser.MediaEncoding.Probing
             return divisor == 0f ? null : dividend / divisor;
         }
 
+        private static void SetVideoRuntimeTicks(InternalMediaInfoResult result, MediaInfo data)
+        {
+            const long durationThreshold = TimeSpan.TicksPerSecond;
+            var longestStreamDuration = 0L;
+
+            foreach (var stream in result.Streams ?? Array.Empty<MediaStreamInfo>())
+            {
+                if (stream is null || (stream.CodecType != CodecType.Video && stream.CodecType != CodecType.Audio))
+                {
+                    continue;
+                }
+
+                var streamDuration = ParseDurationTicks(stream.Duration);
+                if (streamDuration is null || streamDuration <= durationThreshold)
+                {
+                    var taggedDuration = GetRuntimeSecondsFromTags(stream);
+                    if (taggedDuration is not null && double.IsFinite(taggedDuration.Value) && taggedDuration.Value > 0)
+                    {
+                        streamDuration = TimeSpan.FromSeconds(taggedDuration.Value).Ticks;
+                    }
+                }
+
+                if (streamDuration is not null && streamDuration.Value > durationThreshold)
+                {
+                    longestStreamDuration = Math.Max(longestStreamDuration, streamDuration.Value);
+                }
+            }
+
+            if (longestStreamDuration > 0)
+            {
+                data.RunTimeTicks = longestStreamDuration;
+            }
+
+            var formatDuration = ParseDurationTicks(result.Format?.Duration);
+            if (formatDuration is not null
+                && (data.RunTimeTicks is null
+                    || data.RunTimeTicks.Value <= durationThreshold
+                    || data.RunTimeTicks.Value > formatDuration.Value))
+            {
+                data.RunTimeTicks = formatDuration;
+            }
+        }
+
+        private static long? ParseDurationTicks(string? duration)
+        {
+            if (!double.TryParse(duration, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+                || !double.IsFinite(seconds)
+                || seconds < 0
+                || seconds > TimeSpan.MaxValue.TotalSeconds)
+            {
+                return null;
+            }
+
+            return TimeSpan.FromSeconds(seconds).Ticks;
+        }
+
         private static void SetAudioRuntimeTicks(InternalMediaInfoResult result, MediaInfo data)
         {
             // Get the first info stream
@@ -1267,7 +1320,7 @@ namespace MediaBrowser.MediaEncoding.Probing
                 return null;
             }
 
-            var bps = GetDictionaryValue(streamInfo.Tags, "BPS-eng") ?? GetDictionaryValue(streamInfo.Tags, "BPS");
+            var bps = GetDictionaryValue(streamInfo.Tags, "BPS") ?? GetDictionaryValue(streamInfo.Tags, "BPS-eng");
             if (int.TryParse(bps, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBps))
             {
                 return parsedBps;
@@ -1306,8 +1359,8 @@ namespace MediaBrowser.MediaEncoding.Probing
                 return null;
             }
 
-            var numberOfBytes = GetDictionaryValue(streamInfo.Tags, "NUMBER_OF_BYTES-eng")
-                                ?? GetDictionaryValue(streamInfo.Tags, "NUMBER_OF_BYTES");
+            var numberOfBytes = GetDictionaryValue(streamInfo.Tags, "NUMBER_OF_BYTES")
+                                ?? GetDictionaryValue(streamInfo.Tags, "NUMBER_OF_BYTES-eng");
             if (long.TryParse(numberOfBytes, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBytes))
             {
                 return parsedBytes;

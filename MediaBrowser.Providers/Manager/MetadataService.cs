@@ -1247,7 +1247,7 @@ namespace MediaBrowser.Providers.Manager
                 }
             }
 
-            if (replaceData || !target.PremiereDate.HasValue)
+            if (replaceData || !target.PremiereDate.HasValue || (IsYearOnlyDate(target.PremiereDate.Value) && source.PremiereDate.HasValue))
             {
                 target.PremiereDate = source.PremiereDate;
             }
