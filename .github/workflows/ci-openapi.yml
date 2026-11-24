@@ -20,19 +20,31 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
+      - name: Read .NET SDK version
+        id: sdk
+        run: |
+          set -euo pipefail
+          sdk_major="$(jq -r '.sdk.version | split(".")[0]' global.json)"
+          printf 'version=%s.0.x\n' "$sdk_major" >> "$GITHUB_OUTPUT"
       - name: Setup .NET
         uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5.0.0
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: ${{ steps.sdk.outputs.version }}
       - name: Generate openapi.json
         run: dotnet test tests/Jellyfin.Server.Integration.Tests/Jellyfin.Server.Integration.Tests.csproj -c Release --filter "Jellyfin.Server.Integration.Tests.OpenApiSpecTests"
+      - name: Normalize OpenAPI artifact path
+        run: |
+          set -euo pipefail
+          openapi_file="$(find tests/Jellyfin.Server.Integration.Tests/bin/Release -type f -name openapi.json -print -quit)"
+          test -n "$openapi_file"
+          cp "$openapi_file" "$RUNNER_TEMP/openapi.json"
       - name: Upload openapi.json
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: openapi-head
           retention-days: 14
           if-no-files-found: error
-          path: tests/Jellyfin.Server.Integration.Tests/bin/Release/net9.0/openapi.json
+          path: ${{ runner.temp }}/openapi.json
 
   openapi-base:
     name: OpenAPI - BASE
@@ -54,19 +66,31 @@ jobs:
           git -c protocol.version=2 fetch --prune --progress --no-recurse-submodules upstream +refs/heads/*:refs/remotes/upstream/* +refs/tags/*:refs/tags/*
           ANCESTOR_REF=$(git merge-base upstream/${{ github.base_ref }} origin/$HEAD_REF)
           git checkout --progress --force $ANCESTOR_REF
+      - name: Read .NET SDK version
+        id: sdk
+        run: |
+          set -euo pipefail
+          sdk_major="$(jq -r '.sdk.version | split(".")[0]' global.json)"
+          printf 'version=%s.0.x\n' "$sdk_major" >> "$GITHUB_OUTPUT"
       - name: Setup .NET
         uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5.0.0
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: ${{ steps.sdk.outputs.version }}
       - name: Generate openapi.json
         run: dotnet test tests/Jellyfin.Server.Integration.Tests/Jellyfin.Server.Integration.Tests.csproj -c Release --filter "Jellyfin.Server.Integration.Tests.OpenApiSpecTests"
+      - name: Normalize OpenAPI artifact path
+        run: |
+          set -euo pipefail
+          openapi_file="$(find tests/Jellyfin.Server.Integration.Tests/bin/Release -type f -name openapi.json -print -quit)"
+          test -n "$openapi_file"
+          cp "$openapi_file" "$RUNNER_TEMP/openapi.json"
       - name: Upload openapi.json
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: openapi-base
           retention-days: 14
           if-no-files-found: error
-          path: tests/Jellyfin.Server.Integration.Tests/bin/Release/net9.0/openapi.json
+          path: ${{ runner.temp }}/openapi.json
 
   openapi-diff:
     permissions:
