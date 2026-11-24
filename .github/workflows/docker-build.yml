@@ -6,7 +6,12 @@ on:
       source_ref:
         description: Git branch or commit to build
         required: true
-        default: codex/android-hevc-hdr10-config
+        default: codex/jellyfin-12.4-clean-base
+        type: string
+      web_ref:
+        description: Git branch or commit for the pinned Jellyfin Web source
+        required: true
+        default: fde771e11a50d2dfdb47c1601802ce0352df2a83
         type: string
       image_tag:
         description: Docker Hub tag for the candidate image
@@ -28,10 +33,50 @@ jobs:
           ref: ${{ inputs.source_ref }}
           path: source
 
+      - name: Check out requested Jellyfin Web source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: invoker-kael/jellyfin-web-android-hevc-hdr10
+          ref: ${{ inputs.web_ref }}
+          path: web-source
+
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: web-source/.nvmrc
+          cache: npm
+          cache-dependency-path: web-source/package-lock.json
+
+      - name: Install Web dependencies
+        working-directory: web-source
+        run: npm ci --no-audit --no-fund
+
+      - name: Test and type-check Jellyfin Web
+        working-directory: web-source
+        run: |
+          set -euo pipefail
+          npm test
+          npm run build:check
+
+      - name: Build and stage Jellyfin Web assets
+        working-directory: web-source
+        run: |
+          set -euo pipefail
+          npm run build:production
+          test -s dist/index.html
+          test -s dist/serviceworker.js
+          test -s dist/manifest.json
+          grep -Fq 'main.jellyfin.bundle.js?' dist/index.html
+          test -n "$(find dist -type f -name '*.chunk.js' -print -quit)"
+          sha256sum dist/index.html dist/serviceworker.js
+          mkdir -p ../source/web-dist
+          cp -a dist/. ../source/web-dist/
+          test -s ../source/web-dist/index.html
 
       - name: Run server test suite
         working-directory: source
@@ -44,8 +89,9 @@ jobs:
         run: |
           set -euo pipefail
           source_sha="$(git -C source rev-parse HEAD)"
+          web_sha="$(git -C web-source rev-parse HEAD)"
           image="invokerkael/jellyfin-android-hevc-hdr10:${IMAGE_TAG}"
-          docker build --pull --platform linux/amd64 --file source/deploy/Dockerfile.server --build-arg "JELLYFIN_SERVER_COMMIT_SHA=${source_sha}" --tag "${image}" source
+          docker build --pull --platform linux/amd64 --file source/deploy/Dockerfile.server --build-arg "JELLYFIN_SERVER_COMMIT_SHA=${source_sha}" --build-arg "JELLYFIN_WEB_COMMIT_SHA=${web_sha}" --tag "${image}" source
           set +e
           server_version="$(docker run --rm --entrypoint /jellyfin/jellyfin "${image}" --version 2>&1)"
           server_version_status=$?
@@ -60,14 +106,25 @@ jobs:
           esac
           actual_version="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${image}")"
           actual_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")"
-          printf 'Image labels: version=%s revision=%s expected_revision=%s\n' "${actual_version}" "${actual_revision}" "${source_sha}"
-          if [[ "${actual_version}" != "12.4.0" || "${actual_revision}" != "${source_sha}" ]]; then
-            printf '::error::Image labels do not match the source build.\n'
+          actual_web_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.web.revision"}}' "${image}")"
+          printf 'Image labels: version=%s server_revision=%s web_revision=%s\n' "${actual_version}" "${actual_revision}" "${actual_web_revision}"
+          if [[ "${actual_version}" != "12.4.0" || "${actual_revision}" != "${source_sha}" || "${actual_web_revision}" != "${web_sha}" ]]; then
+            printf '::error::Image labels do not match the requested source revisions.\n'
             exit 1
           fi
+          container_id="$(docker create "${image}")"
+          trap 'docker rm -f "${container_id}" >/dev/null 2>&1 || true' EXIT
+          docker cp "${container_id}:/jellyfin/jellyfin-web/index.html" "${RUNNER_TEMP}/jellyfin-web-index.html"
+          docker cp "${container_id}:/jellyfin/jellyfin-web/serviceworker.js" "${RUNNER_TEMP}/jellyfin-web-serviceworker.js"
+          test -s "${RUNNER_TEMP}/jellyfin-web-index.html"
+          test -s "${RUNNER_TEMP}/jellyfin-web-serviceworker.js"
+          grep -Fq 'main.jellyfin.bundle.js?' "${RUNNER_TEMP}/jellyfin-web-index.html"
+          docker rm -f "${container_id}" >/dev/null
+          trap - EXIT
           image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
           printf 'image=%s\n' "${image}" >> "${GITHUB_OUTPUT}"
           printf 'source_sha=%s\n' "${source_sha}" >> "${GITHUB_OUTPUT}"
+          printf 'web_sha=%s\n' "${web_sha}" >> "${GITHUB_OUTPUT}"
           printf 'server_version=%s\n' "${server_version}" >> "${GITHUB_OUTPUT}"
           printf 'image_id=%s\n' "${image_id}" >> "${GITHUB_OUTPUT}"
 
@@ -97,6 +154,7 @@ jobs:
           IMAGE_REF: ${{ steps.image.outputs.image }}
           SOURCE_SHA: ${{ steps.image.outputs.source_sha }}
           SERVER_VERSION: ${{ steps.image.outputs.server_version }}
+          WEB_COMMIT: ${{ steps.image.outputs.web_sha }}
           IMAGE_ID: ${{ steps.image.outputs.image_id }}
         run: |
           set -euo pipefail
@@ -110,6 +168,7 @@ jobs:
             printf '### Candidate image published\n\n'
             printf -- '- Source commit: `%s`\n' "${SOURCE_SHA}"
             printf -- '- Server version: `%s`\n' "${SERVER_VERSION}"
+            printf -- '- Web commit: `%s`\n' "${WEB_COMMIT}"
             printf -- '- Docker image: `%s@%s`\n' "${IMAGE_REF}" "${digest}"
             printf -- '- Local image ID: `%s`\n' "${IMAGE_ID}"
           } >> "${GITHUB_STEP_SUMMARY}"
@@ -120,6 +179,7 @@ jobs:
           IMAGE_REF: ${{ steps.image.outputs.image }}
           SOURCE_SHA: ${{ steps.image.outputs.source_sha }}
           SERVER_VERSION: ${{ steps.image.outputs.server_version }}
+          WEB_COMMIT: ${{ steps.image.outputs.web_sha }}
           IMAGE_ID: ${{ steps.image.outputs.image_id }}
         run: |
           set -euo pipefail
@@ -127,6 +187,7 @@ jobs:
             printf '### Candidate image built but not published\n\n'
             printf -- '- Source commit: `%s`\n' "${SOURCE_SHA}"
             printf -- '- Server version: `%s`\n' "${SERVER_VERSION}"
+            printf -- '- Web commit: `%s`\n' "${WEB_COMMIT}"
             printf -- '- Local image tag: `%s`\n' "${IMAGE_REF}"
             printf -- '- Local image ID: `%s`\n' "${IMAGE_ID}"
             printf '\nAdd the DOCKERHUB_TOKEN repository secret and rerun to publish the image.\n'
