@@ -2,9 +2,9 @@ name: "CodeQL"
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, codex/jellyfin-12.4-clean-base ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, codex/jellyfin-12.4-clean-base ]
   schedule:
     - cron: '24 2 * * 4'
 
