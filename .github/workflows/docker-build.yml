@@ -46,7 +46,11 @@ jobs:
           source_sha="$(git -C source rev-parse HEAD)"
           image="invokerkael/jellyfin-android-hevc-hdr10:${IMAGE_TAG}"
           docker build --pull --platform linux/amd64 --file source/deploy/Dockerfile.server --build-arg "JELLYFIN_SERVER_COMMIT_SHA=${source_sha}" --tag "${image}" source
+          set +e
           server_version="$(docker run --rm --entrypoint /jellyfin/jellyfin "${image}" --version 2>&1)"
+          server_version_status=$?
+          set -e
+          printf 'Server version smoke output (exit %s): %s\n' "${server_version_status}" "${server_version}"
           case "${server_version}" in
             "Jellyfin.Server 12.4.0"*) ;;
             *)
@@ -56,6 +60,7 @@ jobs:
           esac
           actual_version="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${image}")"
           actual_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")"
+          printf 'Image labels: version=%s revision=%s expected_revision=%s\n' "${actual_version}" "${actual_revision}" "${source_sha}"
           if [[ "${actual_version}" != "12.4.0" || "${actual_revision}" != "${source_sha}" ]]; then
             printf '::error::Image labels do not match the source build.\n'
             exit 1
