@@ -23,7 +23,7 @@ namespace MediaBrowser.Controller.Entities
     /// </summary>
     public class AggregateFolder : Folder
     {
-        private readonly object _childIdsLock = new object();
+        private readonly Lock _childIdsLock = new();
 
         /// <summary>
         /// The _virtual children.
@@ -54,6 +54,24 @@ namespace MediaBrowser.Controller.Entities
 
         public string[] PhysicalLocationsList { get; set; }
 
+        // Children caches the resolved items, _childrenIds the ids they were loaded from. Clearing
+        // only the former sends the next read back through LoadChildren, which replays the stale
+        // id list, so a caller invalidating this folder has to drop both.
+        [JsonIgnore]
+        public override IEnumerable<BaseItem> Children
+        {
+            get => base.Children;
+            set
+            {
+                if (value is null)
+                {
+                    ClearCache();
+                }
+
+                base.Children = value;
+            }
+        }
+
         public override bool CanDelete()
         {
             return false;
@@ -64,7 +82,7 @@ namespace MediaBrowser.Controller.Entities
             return CreateResolveArgs(directoryService, true).FileSystemChildren;
         }
 
-        protected override List<BaseItem> LoadChildren()
+        protected override IReadOnlyList<BaseItem> LoadChildren()
         {
             lock (_childIdsLock)
             {

@@ -4,17 +4,19 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Mime;
+using System.Reflection.Metadata.Ecma335;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AsyncKeyedLock;
-using Jellyfin.Data.Entities;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Common.Extensions;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Drawing;
+using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Net;
@@ -29,10 +31,10 @@ namespace Jellyfin.Drawing;
 public sealed class ImageProcessor : IImageProcessor, IDisposable
 {
     // Increment this when there's a change requiring caches to be invalidated
-    private const char Version = '3';
+    private const char Version = '4';
 
     private static readonly HashSet<string> _transparentImageTypes
-        = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".png", ".webp", ".gif" };
+        = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".png", ".webp", ".gif", ".svg" };
 
     private readonly ILogger<ImageProcessor> _logger;
     private readonly IFileSystem _fileSystem;
@@ -83,7 +85,6 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
             "jpeg",
             "jpg",
             "png",
-            "aiff",
             "cr2",
             "crw",
             "nef",
@@ -250,6 +251,33 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
     /// <summary>
     /// Gets the cache file path based on a set of parameters.
     /// </summary>
+    /// <param name="originalPath">The original image path.</param>
+    /// <param name="dateModified">The source image modification date.</param>
+    /// <param name="format">The output format.</param>
+    /// <param name="options">The image processing options.</param>
+    /// <returns>The transformed image cache path.</returns>
+    internal string GetCacheFilePath(
+        string originalPath,
+        DateTime dateModified,
+        ImageFormat format,
+        ImageProcessingOptions options)
+        => GetCacheFilePath(
+            originalPath,
+            options.Width,
+            options.Height,
+            options.MaxWidth,
+            options.MaxHeight,
+            options.FillWidth,
+            options.FillHeight,
+            options.Quality,
+            dateModified,
+            format,
+            options.PercentPlayed,
+            options.UnplayedCount,
+            options.Blur,
+            options.BackgroundColor,
+            options.ForegroundLayer);
+
     private string GetCacheFilePath(
         string originalPath,
         int? width,
@@ -317,13 +345,13 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
 
         if (percentPlayed > 0)
         {
-            filename.Append(",p=");
-            filename.Append(percentPlayed);
+            filename.Append(",pp=");
+            filename.Append(percentPlayed.ToString(CultureInfo.InvariantCulture));
         }
 
         if (unwatchedCount.HasValue)
         {
-            filename.Append(",p=");
+            filename.Append(",uc=");
             filename.Append(unwatchedCount.Value);
         }
 
@@ -404,8 +432,27 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
     }
 
     /// <inheritdoc />
+    public string GetImageCacheTag(string baseItemPath, DateTime imageDateModified)
+        => (baseItemPath + imageDateModified.Ticks).GetMD5().ToString("N", CultureInfo.InvariantCulture);
+
+    /// <inheritdoc />
     public string GetImageCacheTag(BaseItem item, ItemImageInfo image)
-        => (item.Path + image.DateModified.Ticks).GetMD5().ToString("N", CultureInfo.InvariantCulture);
+        => GetImageCacheTag(item.Path, image.DateModified);
+
+    /// <inheritdoc />
+    public string GetImageCacheTag(BaseItemDto item, ItemImageInfo image)
+        => GetImageCacheTag(item.Path, image.DateModified);
+
+    /// <inheritdoc />
+    public string? GetImageCacheTag(BaseItemDto item, ChapterInfo chapter)
+    {
+        if (chapter.ImagePath is null)
+        {
+            return null;
+        }
+
+        return GetImageCacheTag(item.Path, chapter.ImageDateModified);
+    }
 
     /// <inheritdoc />
     public string? GetImageCacheTag(BaseItem item, ChapterInfo chapter)
@@ -431,8 +478,7 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
             return null;
         }
 
-        return (user.ProfileImage.Path + user.ProfileImage.LastModified.Ticks).GetMD5()
-            .ToString("N", CultureInfo.InvariantCulture);
+        return GetImageCacheTag(user.ProfileImage.Path, user.ProfileImage.LastModified);
     }
 
     private Task<(string Path, DateTime DateModified)> GetSupportedImage(string originalImagePath, DateTime dateModified)
@@ -504,11 +550,11 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
     /// <inheritdoc />
     public void CreateImageCollage(ImageCollageOptions options, string? libraryName)
     {
-        _logger.LogInformation("Creating image collage and saving to {Path}", options.OutputPath);
+        _logger.LogDebug("Creating image collage and saving to {Path}", options.OutputPath);
 
         _imageEncoder.CreateImageCollage(options, libraryName);
 
-        _logger.LogInformation("Completed creation of image collage and saved to {Path}", options.OutputPath);
+        _logger.LogDebug("Completed creation of image collage and saved to {Path}", options.OutputPath);
     }
 
     /// <inheritdoc />

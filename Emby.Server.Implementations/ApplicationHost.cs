@@ -14,7 +14,9 @@ using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 using Emby.Naming.Common;
+using Emby.Naming.Video;
 using Emby.Photos;
+using Emby.Server.Implementations.Chapters;
 using Emby.Server.Implementations.Collections;
 using Emby.Server.Implementations.Configuration;
 using Emby.Server.Implementations.Cryptography;
@@ -24,6 +26,8 @@ using Emby.Server.Implementations.Dto;
 using Emby.Server.Implementations.HttpServer.Security;
 using Emby.Server.Implementations.IO;
 using Emby.Server.Implementations.Library;
+using Emby.Server.Implementations.Library.Search;
+using Emby.Server.Implementations.Library.SimilarItems;
 using Emby.Server.Implementations.Localization;
 using Emby.Server.Implementations.Playlists;
 using Emby.Server.Implementations.Plugins;
@@ -35,12 +39,16 @@ using Emby.Server.Implementations.SyncPlay;
 using Emby.Server.Implementations.TV;
 using Emby.Server.Implementations.Updates;
 using Jellyfin.Api.Helpers;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Drawing;
 using Jellyfin.MediaEncoding.Hls.Playlist;
 using Jellyfin.Networking.Manager;
 using Jellyfin.Networking.Udp;
-using Jellyfin.Server.Implementations;
+using Jellyfin.Server.Implementations.FullSystemBackup;
+using Jellyfin.Server.Implementations.Item;
 using Jellyfin.Server.Implementations.MediaSegments;
+using Jellyfin.Server.Implementations.SystemBackupService;
 using MediaBrowser.Common;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Events;
@@ -56,10 +64,14 @@ using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.IO;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.LibraryTaskScheduler;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Lyrics;
 using MediaBrowser.Controller.MediaEncoding;
+using MediaBrowser.Controller.MediaSegments;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Controller.Playlists;
@@ -83,15 +95,20 @@ using MediaBrowser.Model.Net;
 using MediaBrowser.Model.Serialization;
 using MediaBrowser.Model.System;
 using MediaBrowser.Model.Tasks;
-using MediaBrowser.Providers.Chapters;
+using MediaBrowser.Providers.Books;
+using MediaBrowser.Providers.Books.ComicBookInfo;
+using MediaBrowser.Providers.Books.ComicInfo;
 using MediaBrowser.Providers.Lyric;
 using MediaBrowser.Providers.Manager;
+using MediaBrowser.Providers.Plugins.ListenBrainz;
+using MediaBrowser.Providers.Plugins.ListenBrainz.Api;
 using MediaBrowser.Providers.Plugins.Tmdb;
+using MediaBrowser.Providers.Plugins.Tmdb.Movies;
+using MediaBrowser.Providers.Plugins.Tmdb.TV;
 using MediaBrowser.Providers.Subtitles;
 using MediaBrowser.XbmcMetadata.Providers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -161,8 +178,6 @@ namespace Emby.Server.Implementations
                 ConfigurationManager.Configuration,
                 ApplicationPaths.PluginsPath,
                 ApplicationVersion);
-
-            _disposableParts.Add(_pluginManager);
         }
 
         /// <summary>
@@ -266,8 +281,15 @@ namespace Emby.Server.Implementations
                 ? Environment.MachineName
                 : ConfigurationManager.Configuration.ServerName;
 
+        public string RestoreBackupPath { get; set; }
+
         public string ExpandVirtualPath(string path)
         {
+            if (path is null)
+            {
+                return null;
+            }
+
             var appPaths = ApplicationPaths;
 
             return path.Replace(appPaths.VirtualDataPath, appPaths.DataPath, StringComparison.OrdinalIgnoreCase)
@@ -397,6 +419,8 @@ namespace Emby.Server.Implementations
         {
             Logger.LogInformation("Running startup tasks");
 
+            EnsureStartupWizardIntegrity();
+
             Resolve<ITaskManager>().AddTasks(GetExports<IScheduledTask>(false));
 
             ConfigurationManager.ConfigurationUpdated += OnConfigurationUpdated;
@@ -414,6 +438,24 @@ namespace Emby.Server.Implementations
             CoreStartupHasCompleted = true;
 
             return Task.CompletedTask;
+        }
+
+        private void EnsureStartupWizardIntegrity()
+        {
+            if (ConfigurationManager.CommonConfiguration.IsStartupWizardCompleted)
+            {
+                return;
+            }
+
+            var hasConfiguredAdministrator = Resolve<IUserManager>().GetUsers()
+                .Any(user => user.HasPermission(PermissionKind.IsAdministrator) && !string.IsNullOrEmpty(user.Password));
+
+            if (hasConfiguredAdministrator)
+            {
+                Logger.LogWarning("The startup wizard is marked incomplete but a configured administrator already exists. Marking setup as completed to prevent the unauthenticated setup endpoints from being reachable.");
+                ConfigurationManager.Configuration.IsStartupWizardCompleted = true;
+                ConfigurationManager.SaveConfiguration();
+            }
         }
 
         /// <inheritdoc/>
@@ -465,6 +507,7 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<IApplicationHost>(this);
             serviceCollection.AddSingleton<IPluginManager>(_pluginManager);
             serviceCollection.AddSingleton<IApplicationPaths>(ApplicationPaths);
+            serviceCollection.AddSingleton<IBackupService, BackupService>();
 
             serviceCollection.AddSingleton<IFileSystem, ManagedFileSystem>();
             serviceCollection.AddSingleton<IShortcutHandler, MbLinkShortcutHandler>();
@@ -472,6 +515,19 @@ namespace Emby.Server.Implementations
             serviceCollection.AddScoped<ISystemManager, SystemManager>();
 
             serviceCollection.AddSingleton<TmdbClientManager>();
+            serviceCollection.AddSingleton<TmdbMovieSimilarProvider>();
+            serviceCollection.AddSingleton<TmdbSeriesSimilarProvider>();
+
+            serviceCollection.AddSingleton<ListenBrainzLabsClient>();
+            serviceCollection.AddSingleton<ListenBrainzSimilarArtistProvider>();
+
+            // register the generic local metadata provider for comic files
+            serviceCollection.AddSingleton<ComicProvider>();
+
+            // register the actual implementations of the local metadata provider for comic files
+            serviceCollection.AddSingleton<IComicProvider, ComicBookInfoProvider>();
+            serviceCollection.AddSingleton<IComicProvider, ExternalComicInfoProvider>();
+            serviceCollection.AddSingleton<IComicProvider, InternalComicInfoProvider>();
 
             serviceCollection.AddSingleton(NetManager);
 
@@ -492,26 +548,45 @@ namespace Emby.Server.Implementations
 
             serviceCollection.AddSingleton<IBlurayExaminer, BdInfoExaminer>();
 
-            serviceCollection.AddSingleton<IUserDataRepository, SqliteUserDataRepository>();
             serviceCollection.AddSingleton<IUserDataManager, UserDataManager>();
 
-            serviceCollection.AddSingleton<IItemRepository, SqliteItemRepository>();
+            serviceCollection.AddSingleton<BaseItemRepository>();
+            serviceCollection.AddSingleton<IItemRepository>(sp => sp.GetRequiredService<BaseItemRepository>());
+            serviceCollection.AddSingleton<IItemQueryHelpers>(sp => sp.GetRequiredService<BaseItemRepository>());
+            serviceCollection.AddSingleton<IItemPersistenceService, ItemPersistenceService>();
+            serviceCollection.AddSingleton<INextUpService, NextUpService>();
+            serviceCollection.AddSingleton<IItemCountService, ItemCountService>();
+            serviceCollection.AddSingleton<ILinkedChildrenService, LinkedChildrenService>();
+            serviceCollection.AddSingleton<IPeopleRepository, PeopleRepository>();
+            serviceCollection.AddSingleton<IChapterRepository, ChapterRepository>();
+            serviceCollection.AddSingleton<IMediaAttachmentRepository, MediaAttachmentRepository>();
+            serviceCollection.AddSingleton<IMediaStreamRepository, MediaStreamRepository>();
+            serviceCollection.AddSingleton<IKeyframeRepository, KeyframeRepository>();
+            serviceCollection.AddSingleton<IItemTypeLookup, ItemTypeLookup>();
 
             serviceCollection.AddSingleton<IMediaEncoder, MediaBrowser.MediaEncoding.Encoder.MediaEncoder>();
             serviceCollection.AddSingleton<EncodingHelper>();
+            serviceCollection.AddSingleton<IPathManager, PathManager>();
+            serviceCollection.AddSingleton<IExternalDataManager, ExternalDataManager>();
 
             // TODO: Refactor to eliminate the circular dependencies here so that Lazy<T> isn't required
             serviceCollection.AddTransient(provider => new Lazy<ILibraryMonitor>(provider.GetRequiredService<ILibraryMonitor>));
             serviceCollection.AddTransient(provider => new Lazy<IProviderManager>(provider.GetRequiredService<IProviderManager>));
             serviceCollection.AddTransient(provider => new Lazy<IUserViewManager>(provider.GetRequiredService<IUserViewManager>));
+            serviceCollection.AddTransient(provider => new Lazy<IExternalDataManager>(provider.GetRequiredService<IExternalDataManager>));
             serviceCollection.AddSingleton<ILibraryManager, LibraryManager>();
             serviceCollection.AddSingleton<NamingOptions>();
+            serviceCollection.AddSingleton<VideoListResolver>();
 
             serviceCollection.AddSingleton<IMusicManager, MusicManager>();
 
             serviceCollection.AddSingleton<ILibraryMonitor, LibraryMonitor>();
+            serviceCollection.AddSingleton<DotIgnoreIgnoreRule>();
 
-            serviceCollection.AddSingleton<ISearchEngine, SearchEngine>();
+            serviceCollection.AddSingleton<ISimilarItemsManager, SimilarItemsManager>();
+
+            serviceCollection.AddSingleton<ISearchManager, SearchManager>();
+            serviceCollection.AddSingleton<ISearchProvider, SqlSearchProvider>();
 
             serviceCollection.AddSingleton<IWebSocketManager, WebSocketManager>();
 
@@ -533,6 +608,7 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<ISessionManager, SessionManager>();
 
             serviceCollection.AddSingleton<ICollectionManager, CollectionManager>();
+            serviceCollection.AddSingleton<ILimitedConcurrencyLibraryScheduler, LimitedConcurrencyLibraryScheduler>();
 
             serviceCollection.AddSingleton<IPlaylistManager, PlaylistManager>();
 
@@ -542,13 +618,12 @@ namespace Emby.Server.Implementations
 
             serviceCollection.AddSingleton<IChapterManager, ChapterManager>();
 
-            serviceCollection.AddSingleton<IEncodingManager, MediaEncoder.EncodingManager>();
-
             serviceCollection.AddSingleton<IAuthService, AuthService>();
             serviceCollection.AddSingleton<IQuickConnect, QuickConnectManager>();
 
             serviceCollection.AddSingleton<ISubtitleParser, SubtitleEditParser>();
             serviceCollection.AddSingleton<ISubtitleEncoder, SubtitleEncoder>();
+            serviceCollection.AddSingleton<IKeyframeManager, KeyframeManager>();
 
             serviceCollection.AddSingleton<IAttachmentExtractor, MediaBrowser.MediaEncoding.Attachments.AttachmentExtractor>();
 
@@ -565,23 +640,10 @@ namespace Emby.Server.Implementations
         /// <summary>
         /// Create services registered with the service container that need to be initialized at application startup.
         /// </summary>
+        /// <param name="startupConfig">The configuration used to initialise the application.</param>
         /// <returns>A task representing the service initialization operation.</returns>
-        public async Task InitializeServices()
+        public async Task InitializeServices(IConfiguration startupConfig)
         {
-            var jellyfinDb = await Resolve<IDbContextFactory<JellyfinDbContext>>().CreateDbContextAsync().ConfigureAwait(false);
-            await using (jellyfinDb.ConfigureAwait(false))
-            {
-                if ((await jellyfinDb.Database.GetPendingMigrationsAsync().ConfigureAwait(false)).Any())
-                {
-                    Logger.LogInformation("There are pending EFCore migrations in the database. Applying... (This may take a while, do not stop Jellyfin)");
-                    await jellyfinDb.Database.MigrateAsync().ConfigureAwait(false);
-                    Logger.LogInformation("EFCore migrations applied successfully");
-                }
-            }
-
-            ((SqliteItemRepository)Resolve<IItemRepository>()).Initialize();
-            ((SqliteUserDataRepository)Resolve<IUserDataRepository>()).Initialize();
-
             var localizationManager = (LocalizationManager)Resolve<ILocalizationManager>();
             await localizationManager.LoadAll().ConfigureAwait(false);
 
@@ -607,7 +669,7 @@ namespace Emby.Server.Implementations
                 // Don't use an empty string password
                 password = string.IsNullOrWhiteSpace(password) ? null : password;
 
-                var localCert = new X509Certificate2(path, password, X509KeyStorageFlags.UserKeySet);
+                var localCert = X509CertificateLoader.LoadPkcs12FromFile(path, password, X509KeyStorageFlags.UserKeySet);
                 if (!localCert.HasPrivateKey)
                 {
                     Logger.LogError("No private key included in SSL cert {CertificateLocation}.", path);
@@ -629,23 +691,27 @@ namespace Emby.Server.Implementations
         private void SetStaticProperties()
         {
             // For now there's no real way to inject these properly
-            BaseItem.Logger = Resolve<ILogger<BaseItem>>();
-            BaseItem.ConfigurationManager = ConfigurationManager;
-            BaseItem.LibraryManager = Resolve<ILibraryManager>();
-            BaseItem.ProviderManager = Resolve<IProviderManager>();
-            BaseItem.LocalizationManager = Resolve<ILocalizationManager>();
-            BaseItem.ItemRepository = Resolve<IItemRepository>();
-            BaseItem.FileSystem = Resolve<IFileSystem>();
-            BaseItem.UserDataManager = Resolve<IUserDataManager>();
+            BaseItem.ChapterManager = Resolve<IChapterManager>();
             BaseItem.ChannelManager = Resolve<IChannelManager>();
-            Video.RecordingsManager = Resolve<IRecordingsManager>();
-            Folder.UserViewManager = Resolve<IUserViewManager>();
-            UserView.TVSeriesManager = Resolve<ITVSeriesManager>();
-            UserView.CollectionManager = Resolve<ICollectionManager>();
-            BaseItem.MediaSourceManager = Resolve<IMediaSourceManager>();
+            BaseItem.ConfigurationManager = ConfigurationManager;
+            BaseItem.FileSystem = Resolve<IFileSystem>();
+            BaseItem.ItemRepository = Resolve<IItemRepository>();
+            BaseItem.ItemCountService = Resolve<IItemCountService>();
+            BaseItem.LibraryManager = Resolve<ILibraryManager>();
+            BaseItem.LocalizationManager = Resolve<ILocalizationManager>();
+            BaseItem.Logger = Resolve<ILogger<BaseItem>>();
             BaseItem.MediaSegmentManager = Resolve<IMediaSegmentManager>();
+            BaseItem.MediaSourceManager = Resolve<IMediaSourceManager>();
+            BaseItem.ProviderManager = Resolve<IProviderManager>();
+            BaseItem.UserDataManager = Resolve<IUserDataManager>();
             CollectionFolder.XmlSerializer = _xmlSerializer;
             CollectionFolder.ApplicationHost = this;
+            Folder.UserViewManager = Resolve<IUserViewManager>();
+            Folder.CollectionManager = Resolve<ICollectionManager>();
+            Folder.LimitedConcurrencyLibraryScheduler = Resolve<ILimitedConcurrencyLibraryScheduler>();
+            Episode.MediaEncoder = Resolve<IMediaEncoder>();
+            UserView.TVSeriesManager = Resolve<ITVSeriesManager>();
+            Video.RecordingsManager = Resolve<IRecordingsManager>();
         }
 
         /// <summary>
@@ -677,6 +743,9 @@ namespace Emby.Server.Implementations
                 GetExports<IExternalUrlProvider>());
 
             Resolve<IMediaSourceManager>().AddParts(GetExports<IMediaSourceProvider>());
+
+            Resolve<ISimilarItemsManager>().AddParts(GetExports<ISimilarItemsProvider>());
+            Resolve<ISearchManager>().AddParts(GetExports<ISearchProvider>());
         }
 
         /// <summary>
@@ -918,8 +987,9 @@ namespace Emby.Server.Implementations
         /// <inheritdoc/>
         public string GetLocalApiUrl(string hostname, string scheme = null, int? port = null)
         {
-            // If the smartAPI doesn't start with http then treat it as a host or ip.
-            if (hostname.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            // If the smartAPI isn't already a complete URL then treat it as a host or ip.
+            if (hostname.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || hostname.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 return hostname.TrimEnd('/');
             }
@@ -996,6 +1066,8 @@ namespace Emby.Server.Implementations
                 }
 
                 _disposableParts.Clear();
+
+                _pluginManager?.Dispose();
             }
 
             _disposed = true;

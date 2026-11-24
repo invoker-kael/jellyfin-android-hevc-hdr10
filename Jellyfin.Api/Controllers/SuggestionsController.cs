@@ -3,8 +3,9 @@ using System.ComponentModel.DataAnnotations;
 using Jellyfin.Api.Extensions;
 using Jellyfin.Api.Helpers;
 using Jellyfin.Api.ModelBinders;
-using Jellyfin.Data.Entities;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
@@ -22,6 +23,7 @@ namespace Jellyfin.Api.Controllers;
 /// </summary>
 [Route("")]
 [Authorize]
+[Tags("Suggestion")]
 public class SuggestionsController : BaseJellyfinApiController
 {
     private readonly IDtoService _dtoService;
@@ -59,24 +61,18 @@ public class SuggestionsController : BaseJellyfinApiController
     [ProducesResponseType(StatusCodes.Status200OK)]
     public ActionResult<QueryResult<BaseItemDto>> GetSuggestions(
         [FromQuery] Guid? userId,
-        [FromQuery, ModelBinder(typeof(CommaDelimitedArrayModelBinder))] MediaType[] mediaType,
-        [FromQuery, ModelBinder(typeof(CommaDelimitedArrayModelBinder))] BaseItemKind[] type,
+        [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] MediaType[] mediaType,
+        [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] BaseItemKind[] type,
         [FromQuery] int? startIndex,
         [FromQuery] int? limit,
         [FromQuery] bool enableTotalRecordCount = false)
     {
-        User? user;
-        if (userId.IsNullOrEmpty())
-        {
-            user = null;
-        }
-        else
-        {
-            var requestUserId = RequestHelpers.GetUserId(User, userId);
-            user = _userManager.GetUserById(requestUserId);
-        }
+        var requestUserId = RequestHelpers.GetUserId(User, userId);
+        User? user = requestUserId.IsEmpty()
+            ? null
+            : _userManager.GetUserById(requestUserId);
 
-        var dtoOptions = new DtoOptions().AddClientFields(User);
+        var dtoOptions = new DtoOptions();
         var result = _libraryManager.GetItemsResult(new InternalItemsQuery(user)
         {
             OrderBy = new[] { (ItemSortBy.Random, SortOrder.Descending) },
@@ -115,8 +111,8 @@ public class SuggestionsController : BaseJellyfinApiController
     [ApiExplorerSettings(IgnoreApi = true)]
     public ActionResult<QueryResult<BaseItemDto>> GetSuggestionsLegacy(
         [FromRoute, Required] Guid userId,
-        [FromQuery, ModelBinder(typeof(CommaDelimitedArrayModelBinder))] MediaType[] mediaType,
-        [FromQuery, ModelBinder(typeof(CommaDelimitedArrayModelBinder))] BaseItemKind[] type,
+        [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] MediaType[] mediaType,
+        [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] BaseItemKind[] type,
         [FromQuery] int? startIndex,
         [FromQuery] int? limit,
         [FromQuery] bool enableTotalRecordCount = false)

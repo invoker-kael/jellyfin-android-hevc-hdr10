@@ -10,7 +10,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AsyncKeyedLock;
-using Jellyfin.Data.Enums;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions;
 using MediaBrowser.Common;
 using MediaBrowser.Common.Configuration;
@@ -241,14 +242,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
 
         if (closeLiveStream && !string.IsNullOrWhiteSpace(job.LiveStreamId))
         {
-            try
-            {
-                await _mediaSourceManager.CloseLiveStream(job.LiveStreamId).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error closing live stream for {Path}", job.Path);
-            }
+            await _sessionManager.CloseLiveStreamIfNeededAsync(job.LiveStreamId, job.PlaySessionId).ConfigureAwait(false);
         }
     }
 
@@ -402,26 +396,21 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
         ArgumentException.ThrowIfNullOrEmpty(_mediaEncoder.EncoderPath);
 
         // If subtitles get burned in fonts may need to be extracted from the media file
-        if (state.SubtitleStream is not null && state.SubtitleDeliveryMethod == SubtitleDeliveryMethod.Encode)
+        if (state.SubtitleStream is not null && (state.SubtitleDeliveryMethod == SubtitleDeliveryMethod.Encode || state.BaseRequest.AlwaysBurnInSubtitleWhenTranscoding))
         {
-            var attachmentPath = Path.Combine(_appPaths.CachePath, "attachments", state.MediaSource.Id);
             if (state.MediaSource.VideoType == VideoType.Dvd || state.MediaSource.VideoType == VideoType.BluRay)
             {
                 var concatPath = Path.Join(_appPaths.CachePath, "concat", state.MediaSource.Id + ".concat");
-                await _attachmentExtractor.ExtractAllAttachments(concatPath, state.MediaSource, attachmentPath, cancellationTokenSource.Token).ConfigureAwait(false);
+                await _attachmentExtractor.ExtractAllAttachments(concatPath, state.MediaSource, cancellationTokenSource.Token).ConfigureAwait(false);
             }
             else
             {
-                await _attachmentExtractor.ExtractAllAttachments(state.MediaPath, state.MediaSource, attachmentPath, cancellationTokenSource.Token).ConfigureAwait(false);
+                await _attachmentExtractor.ExtractAllAttachments(state.MediaPath, state.MediaSource, cancellationTokenSource.Token).ConfigureAwait(false);
             }
 
             if (state.SubtitleStream.IsExternal && Path.GetExtension(state.SubtitleStream.Path.AsSpan()).Equals(".mks", StringComparison.OrdinalIgnoreCase))
             {
-                string subtitlePath = state.SubtitleStream.Path;
-                string subtitlePathArgument = string.Format(CultureInfo.InvariantCulture, "file:\"{0}\"", subtitlePath.Replace("\"", "\\\"", StringComparison.Ordinal));
-                string subtitleId = subtitlePath.GetMD5().ToString("N", CultureInfo.InvariantCulture);
-
-                await _attachmentExtractor.ExtractAllAttachmentsExternal(subtitlePathArgument, subtitleId, attachmentPath, cancellationTokenSource.Token).ConfigureAwait(false);
+                await _attachmentExtractor.ExtractAllAttachments(state.SubtitleStream.Path, state.MediaSource, cancellationTokenSource.Token).ConfigureAwait(false);
             }
         }
 
@@ -435,6 +424,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
 
                 // Must consume both stdout and stderr or deadlocks may occur
                 // RedirectStandardOutput = true,
+                StandardErrorEncoding = Encoding.UTF8,
                 RedirectStandardError = true,
                 RedirectStandardInput = true,
                 FileName = _mediaEncoder.EncoderPath,
@@ -622,9 +612,9 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
     /// <inheritdoc />
     public void OnTranscodeEndRequest(TranscodingJob job)
     {
-        job.ActiveRequestCount--;
-        _logger.LogDebug("OnTranscodeEndRequest job.ActiveRequestCount={ActiveRequestCount}", job.ActiveRequestCount);
-        if (job.ActiveRequestCount <= 0)
+        var activeRequestCount = job.DecrementActiveRequestCount();
+        _logger.LogDebug("OnTranscodeEndRequest job.ActiveRequestCount={ActiveRequestCount}", activeRequestCount);
+        if (activeRequestCount <= 0)
         {
             PingTimer(job, false);
         }
@@ -684,7 +674,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
 
             if (state.VideoRequest is not null)
             {
-                _encodingHelper.TryStreamCopy(state);
+                _encodingHelper.TryStreamCopy(state, encodingOptions);
             }
         }
 
@@ -707,7 +697,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                 return null;
             }
 
-            job.ActiveRequestCount++;
+            job.IncrementActiveRequestCount();
             if (string.IsNullOrWhiteSpace(job.PlaySessionId) || job.Type == TranscodingJobType.Progressive)
             {
                 job.StopKillTimer();

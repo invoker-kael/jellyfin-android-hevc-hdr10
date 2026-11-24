@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Mime;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -173,6 +174,37 @@ namespace Jellyfin.Providers.Tests.Manager
             {
                 Assert.False(changed);
             }
+        }
+
+        [Theory]
+        [InlineData(ImageType.Primary, 1)]
+        [InlineData(ImageType.Backdrop, 2)]
+        public void MergeImages_StoredTimeTruncatedToMicroseconds_NoChange(ImageType imageType, int imageCount)
+        {
+            // Regression test for https://github.com/jellyfin/jellyfin/issues/18274
+            var fileTime = new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddTicks(1234567);
+            var storedTime = fileTime.AddTicks(-(fileTime.Ticks % 10));
+
+            var fileSystem = new Mock<IFileSystem>();
+            fileSystem.Setup(fs => fs.GetLastWriteTimeUtc(It.IsAny<FileSystemMetadata>()))
+                .Returns(fileTime);
+            BaseItem.FileSystem = fileSystem.Object;
+
+            var item = GetItemWithImages(imageType, imageCount, true);
+            foreach (var image in item.GetImages(imageType))
+            {
+                image.DateModified = storedTime;
+                image.Height = 1;
+                image.Width = 1;
+            }
+
+            var images = GetImages(imageType, imageCount, true);
+
+            var itemImageProvider = GetItemImageProvider(null, fileSystem);
+            var changed = itemImageProvider.MergeImages(item, images, new ImageRefreshOptions(Mock.Of<IDirectoryService>()));
+
+            Assert.False(changed);
+            Assert.All(item.GetImages(imageType), image => Assert.Equal(1, image.Width));
         }
 
         [Theory]
@@ -391,7 +423,7 @@ namespace Jellyfin.Providers.Tests.Manager
                 {
                     ReasonPhrase = url,
                     StatusCode = HttpStatusCode.OK,
-                    Content = new StringContent(Content, Encoding.UTF8, "image/jpeg")
+                    Content = new StringContent(Content, Encoding.UTF8, MediaTypeNames.Image.Jpeg)
                 });
 
             var refreshOptions = fullRefresh
@@ -554,6 +586,47 @@ namespace Jellyfin.Providers.Tests.Manager
             var result = await itemImageProvider.RefreshImages(item, libraryOptions, new List<IImageProvider> { remoteProvider.Object }, refreshOptions, CancellationToken.None);
 
             Assert.Equal(expectedToUpdate, result.UpdateType.HasFlag(ItemUpdateType.ImageUpdate));
+        }
+
+        [Fact]
+        public async Task RefreshImages_ProviderDynamicThrows_CountsAFailure()
+        {
+            var item = GetItemWithImages(ImageType.Primary, 0, false);
+            var libraryOptions = GetLibraryOptions(item, ImageType.Primary, 1);
+
+            var dynamicProvider = new Mock<IDynamicImageProvider>(MockBehavior.Strict);
+            dynamicProvider.Setup(rp => rp.Name).Returns("MockDynamicProvider");
+            dynamicProvider.Setup(rp => rp.GetSupportedImages(item))
+                .Returns(new[] { ImageType.Primary });
+            dynamicProvider.Setup(rp => rp.GetImage(item, ImageType.Primary, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("provider is broken"));
+
+            var itemImageProvider = GetItemImageProvider(null, new Mock<IFileSystem>());
+            var result = await itemImageProvider.RefreshImages(item, libraryOptions, new List<IImageProvider> { dynamicProvider.Object }, new ImageRefreshOptions(Mock.Of<IDirectoryService>()), CancellationToken.None);
+
+            // Without this the caller stamps DateLastRefreshed and never asks this provider again.
+            Assert.Equal(1, result.Failures);
+        }
+
+        [Fact]
+        public async Task RefreshImages_ProviderRemoteThrows_CountsAFailure()
+        {
+            var item = GetItemWithImages(ImageType.Primary, 0, false);
+            var libraryOptions = GetLibraryOptions(item, ImageType.Primary, 1);
+
+            var remoteProvider = new Mock<IRemoteImageProvider>(MockBehavior.Strict);
+            remoteProvider.Setup(rp => rp.Name).Returns("MockRemoteProvider");
+            remoteProvider.Setup(rp => rp.GetSupportedImages(item))
+                .Returns(new[] { ImageType.Primary });
+
+            var providerManager = new Mock<IProviderManager>(MockBehavior.Strict);
+            providerManager.Setup(pm => pm.GetAvailableRemoteImages(It.IsAny<BaseItem>(), It.IsAny<RemoteImageQuery>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("unreachable"));
+
+            var itemImageProvider = GetItemImageProvider(providerManager.Object, new Mock<IFileSystem>());
+            var result = await itemImageProvider.RefreshImages(item, libraryOptions, new List<IImageProvider> { remoteProvider.Object }, new ImageRefreshOptions(Mock.Of<IDirectoryService>()), CancellationToken.None);
+
+            Assert.Equal(1, result.Failures);
         }
 
         private static ItemImageProvider GetItemImageProvider(IProviderManager? providerManager, Mock<IFileSystem>? mockFileSystem)

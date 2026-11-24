@@ -90,7 +90,7 @@ namespace MediaBrowser.Providers.Manager
         {
             ArgumentException.ThrowIfNullOrEmpty(mimeType);
 
-            var saveLocally = item.SupportsLocalMetadata && item.IsSaveLocalMetadataEnabled() && !item.ExtraType.HasValue && item is not Audio;
+            var saveLocally = item.SupportsLocalMetadata && item.IsSaveLocalMetadataEnabled() && !item.ExtraType.HasValue && (item is AudioBook || item is not Audio);
 
             if (type != ImageType.Primary && item is Episode)
             {
@@ -478,6 +478,22 @@ namespace MediaBrowser.Providers.Manager
                                            : season.IndexNumber.Value.ToString("00", CultureInfo.InvariantCulture);
 
                     var imageFilename = "season" + seasonMarker + "-banner" + extension;
+
+                    return Path.Combine(seriesFolder, imageFilename);
+                }
+            }
+
+            if (type == ImageType.Logo && saveLocally)
+            {
+                if (season is not null && season.IndexNumber.HasValue)
+                {
+                    var seriesFolder = season.SeriesPath;
+
+                    var seasonMarker = season.IndexNumber.Value == 0
+                                        ? "-specials"
+                                        : season.IndexNumber.Value.ToString("00", CultureInfo.InvariantCulture);
+
+                    var imageFilename = "season" + seasonMarker + "-logo" + extension;
 
                     return Path.Combine(seriesFolder, imageFilename);
                 }

@@ -32,12 +32,12 @@ public static class HlsHelpers
         {
             try
             {
-                // Need to use FileShare.ReadWrite because we're reading the file at the same time it's being written
+                // FFmpeg may write or replace the playlist while we're reading it.
                 var fileStream = new FileStream(
                     playlist,
                     FileMode.Open,
                     FileAccess.Read,
-                    FileShare.ReadWrite,
+                    FileShare.ReadWrite | FileShare.Delete,
                     IODefaults.FileStreamBufferSize,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
                 await using (fileStream.ConfigureAwait(false))
@@ -45,15 +45,9 @@ public static class HlsHelpers
                     using var reader = new StreamReader(fileStream);
                     var count = 0;
 
-                    while (!reader.EndOfStream)
+                    string? line;
+                    while ((line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
                     {
-                        var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-                        if (line is null)
-                        {
-                            // Nothing currently in buffer.
-                            break;
-                        }
-
                         if (line.Contains("#EXTINF:", StringComparison.OrdinalIgnoreCase))
                         {
                             count++;
@@ -117,7 +111,13 @@ public static class HlsHelpers
     /// <returns>The playlist text as a string.</returns>
     public static string GetLivePlaylistText(string path, StreamState state)
     {
-        var text = File.ReadAllText(path);
+        string text;
+        // Allow FFmpeg's playlist replacement handle to remain open while reading.
+        using (var fileStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+        using (var reader = new StreamReader(fileStream))
+        {
+            text = reader.ReadToEnd();
+        }
 
         var segmentFormat = EncodingHelper.GetSegmentFileExtension(state.Request.SegmentContainer).TrimStart('.');
         if (string.Equals(segmentFormat, "mp4", StringComparison.OrdinalIgnoreCase))

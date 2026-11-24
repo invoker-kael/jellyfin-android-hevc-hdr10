@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -62,7 +63,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
         private readonly AsyncNonKeyedLocker _thumbnailResourcePool;
 
-        private readonly object _runningProcessesLock = new object();
+        private readonly Lock _runningProcessesLock = new();
         private readonly List<ProcessWrapper> _runningProcesses = new List<ProcessWrapper>();
 
         // MediaEncoder is registered as a Singleton
@@ -72,16 +73,22 @@ namespace MediaBrowser.MediaEncoding.Encoder
         private List<string> _decoders = new List<string>();
         private List<string> _hwaccels = new List<string>();
         private List<string> _filters = new List<string>();
-        private IDictionary<int, bool> _filtersWithOption = new Dictionary<int, bool>();
+        private IDictionary<FilterOptionType, bool> _filtersWithOption = new Dictionary<FilterOptionType, bool>();
+        private IDictionary<BitStreamFilterOptionType, bool> _bitStreamFiltersWithOption = new Dictionary<BitStreamFilterOptionType, bool>();
 
         private bool _isPkeyPauseSupported = false;
         private bool _isLowPriorityHwDecodeSupported = false;
+        private bool _proberSupportsFirstVideoFrame = false;
 
         private bool _isVaapiDeviceAmd = false;
         private bool _isVaapiDeviceInteliHD = false;
         private bool _isVaapiDeviceInteli965 = false;
         private bool _isVaapiDeviceSupportVulkanDrmModifier = false;
         private bool _isVaapiDeviceSupportVulkanDrmInterop = false;
+
+        private bool _canSetProcessPriority = true;
+
+        private bool _isVideoToolboxAv1DecodeAvailable = false;
 
         private static string[] _vulkanImageDrmFmtModifierExts =
         {
@@ -159,6 +166,8 @@ namespace MediaBrowser.MediaEncoding.Encoder
         /// <inheritdoc />
         public bool IsVaapiDeviceSupportVulkanDrmInterop => _isVaapiDeviceSupportVulkanDrmInterop;
 
+        public bool IsVideoToolboxAv1DecodeAvailable => _isVideoToolboxAv1DecodeAvailable;
+
         [GeneratedRegex(@"[^\/\\]+?(\.[^\/\\\n.]+)?$")]
         private static partial Regex FfprobePathRegex();
 
@@ -218,6 +227,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 SetAvailableEncoders(validator.GetEncoders());
                 SetAvailableFilters(validator.GetFilters());
                 SetAvailableFiltersWithOption(validator.GetFiltersWithOption());
+                SetAvailableBitStreamFiltersWithOption(validator.GetBitStreamFiltersWithOption());
                 SetAvailableHwaccels(validator.GetHwaccels());
                 SetMediaEncoderVersion(validator);
 
@@ -225,6 +235,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
                 _isPkeyPauseSupported = validator.CheckSupportedRuntimeKey("p      pause transcoding", _ffmpegVersion);
                 _isLowPriorityHwDecodeSupported = validator.CheckSupportedHwaccelFlag("low_priority");
+                _proberSupportsFirstVideoFrame = validator.CheckSupportedProberOption("only_first_vframe", _ffprobePath);
 
                 // Check the Vaapi device vendor
                 if (OperatingSystem.IsLinux()
@@ -260,6 +271,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
                     {
                         _logger.LogInformation("VAAPI device {RenderNodePath} supports Vulkan DRM interop", options.VaapiDevice);
                     }
+                }
+
+                // Check if VideoToolbox supports AV1 decode
+                if (OperatingSystem.IsMacOS() && SupportsHwaccel("videotoolbox"))
+                {
+                    _isVideoToolboxAv1DecodeAvailable = validator.CheckIsVideoToolboxAv1DecodeAvailable();
                 }
             }
 
@@ -327,9 +344,14 @@ namespace MediaBrowser.MediaEncoding.Encoder
             _filters = list.ToList();
         }
 
-        public void SetAvailableFiltersWithOption(IDictionary<int, bool> dict)
+        public void SetAvailableFiltersWithOption(IDictionary<FilterOptionType, bool> dict)
         {
             _filtersWithOption = dict;
+        }
+
+        public void SetAvailableBitStreamFiltersWithOption(IDictionary<BitStreamFilterOptionType, bool> dict)
+        {
+            _bitStreamFiltersWithOption = dict;
         }
 
         public void SetMediaEncoderVersion(EncoderValidator validator)
@@ -364,12 +386,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
         /// <inheritdoc />
         public bool SupportsFilterWithOption(FilterOptionType option)
         {
-            if (_filtersWithOption.TryGetValue((int)option, out var val))
-            {
-                return val;
-            }
+            return _filtersWithOption.TryGetValue(option, out var val) && val;
+        }
 
-            return false;
+        public bool SupportsBitStreamFilterWithOption(BitStreamFilterOptionType option)
+        {
+            return _bitStreamFiltersWithOption.TryGetValue(option, out var val) && val;
         }
 
         public bool CanEncodeToAudioCodec(string codec)
@@ -395,7 +417,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
         /// <inheritdoc />
         public Task<MediaInfo> GetMediaInfo(MediaInfoRequest request, CancellationToken cancellationToken)
         {
-            var extractChapters = request.MediaType == DlnaProfileType.Video && request.ExtractChapters;
+            var extractChapters = request.ExtractChapters;
             var extraArgs = GetExtraArguments(request);
 
             return GetMediaInfoInternal(
@@ -491,6 +513,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
             var args = extractChapters
                 ? "{0} -i {1} -threads {2} -v warning -print_format json -show_streams -show_chapters -show_format"
                 : "{0} -i {1} -threads {2} -v warning -print_format json -show_streams -show_format";
+
+            if (protocol == MediaProtocol.File && !isAudio && _proberSupportsFirstVideoFrame)
+            {
+                args += " -show_frames -only_first_vframe";
+            }
+
             args = string.Format(CultureInfo.InvariantCulture, args, probeSizeArgument, inputPath, _threads).Trim();
 
             var process = new Process
@@ -501,6 +529,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
                     UseShellExecute = false,
 
                     // Must consume both or ffmpeg may hang due to deadlocks.
+                    StandardOutputEncoding = Encoding.UTF8,
                     RedirectStandardOutput = true,
 
                     FileName = _ffprobePath,
@@ -512,7 +541,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 EnableRaisingEvents = true
             };
 
-            _logger.LogInformation("Starting {ProcessFileName} with args {ProcessArgs}", _ffprobePath, args);
+            _logger.LogDebug("Starting {ProcessFileName} with args {ProcessArgs}", _ffprobePath, args);
 
             var memoryStream = new MemoryStream();
             await using (memoryStream.ConfigureAwait(false))
@@ -612,7 +641,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "I-frame image extraction failed, will attempt standard way. Input: {Arguments}", inputArgument);
+                    _logger.LogWarning(ex, "I-frame image extraction failed, will attempt standard way. Input: {Arguments}", inputArgument);
                 }
             }
 
@@ -682,7 +711,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 // fsbs crop width in half,set the display aspect,crop out any black bars we may have made
                 Video3DFormat.FullSideBySide => @"crop=iw/2:ih:0:0,setdar=dar=a,crop=min(iw\,ih*dar):min(ih\,iw/dar):(iw-min(iw\,iw*sar))/2:(ih - min (ih\,ih/sar))/2,setsar=sar=1",
                 // htab crop height in half,scale to correct size, set the display aspect,crop out any black bars we may have made
-                Video3DFormat.HalfTopAndBottom => @"crop=iw:ih/2:0:0,scale=(iw*2):ih),setdar=dar=a,crop=min(iw\,ih*dar):min(ih\,iw/dar):(iw-min(iw\,iw*sar))/2:(ih - min (ih\,ih/sar))/2,setsar=sar=1",
+                Video3DFormat.HalfTopAndBottom => @"crop=iw:ih/2:0:0,scale=(iw*2):ih,setdar=dar=a,crop=min(iw\,ih*dar):min(ih\,iw/dar):(iw-min(iw\,iw*sar))/2:(ih - min (ih\,ih/sar))/2,setsar=sar=1",
                 // ftab crop height in half, set the display aspect,crop out any black bars we may have made
                 Video3DFormat.FullTopAndBottom => @"crop=iw:ih/2:0:0,setdar=dar=a,crop=min(iw\,ih*dar):min(ih\,iw/dar):(iw-min(iw\,iw*sar))/2:(ih - min (ih\,ih/sar))/2,setsar=sar=1",
                 _ => "scale=round(iw*sar/2)*2:round(ih/2)*2"
@@ -726,7 +755,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 _threads,
                 vf,
                 isAudio ? string.Empty : GetImageResolutionParameter(),
-                EncodingHelper.GetVideoSyncOption("0", EncoderVersion), // passthrough timestamp
+                EncodingHelper.GetVideoSyncOption("-1", EncoderVersion), // auto decide fps mode
                 tempExtractPath);
 
             if (offset.HasValue)
@@ -802,7 +831,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
         }
 
         /// <inheritdoc />
-        public Task<string> ExtractVideoImagesOnIntervalAccelerated(
+        public async Task<string> ExtractVideoImagesOnIntervalAccelerated(
             string inputFile,
             string container,
             MediaSourceInfo mediaSource,
@@ -893,10 +922,14 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 inputArg = "-hwaccel_flags +low_priority " + inputArg;
             }
 
-            if (enableKeyFrameOnlyExtraction)
+            // Force the video stream, otherwise ffmpeg may pick a cover image.
+            var streamIndex = EncodingHelper.FindIndex(mediaSource.MediaStreams, imageStream);
+            if (streamIndex < 0)
             {
-                inputArg = "-skip_frame nokey " + inputArg;
+                throw new InvalidOperationException($"Unable to locate requested stream {imageStream.Title}");
             }
+
+            inputArg += " -map 0:" + streamIndex;
 
             var filterParam = encodingHelper.GetVideoProcessingFilterParam(jobState, options, vidEncoder).Trim();
             if (string.IsNullOrWhiteSpace(filterParam))
@@ -904,7 +937,47 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 throw new InvalidOperationException("EncodingHelper returned empty or invalid filter parameters.");
             }
 
-            return ExtractVideoImagesOnIntervalInternal(inputArg, filterParam, vidEncoder, threads, qualityScale, priority, cancellationToken);
+            // Normalize invalid PTS from containers for non keyframe only mode
+            if (!enableKeyFrameOnlyExtraction)
+            {
+                var fpsFilterIndex = filterParam.IndexOf("fps=", StringComparison.Ordinal);
+                if (fpsFilterIndex >= 0)
+                {
+                    var inputFrameRate = (imageStream.ReferenceFrameRate.HasValue && imageStream.ReferenceFrameRate > 0)
+                        ? imageStream.ReferenceFrameRate.Value : 30;
+
+                    var setPtsFilter = string.Create(CultureInfo.InvariantCulture, $"setpts=N/{inputFrameRate:F3}/TB,");
+
+                    filterParam = filterParam.Insert(fpsFilterIndex, setPtsFilter);
+                }
+                else
+                {
+                    throw new InvalidOperationException("EncodingHelper returned invalid filter parameters.");
+                }
+            }
+
+            try
+            {
+                return await ExtractVideoImagesOnIntervalInternal(
+                    (enableKeyFrameOnlyExtraction ? "-skip_frame nokey " : string.Empty) + inputArg,
+                    filterParam,
+                    vidEncoder,
+                    threads,
+                    qualityScale,
+                    priority,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (FfmpegException ex)
+            {
+                if (!enableKeyFrameOnlyExtraction)
+                {
+                    throw;
+                }
+
+                _logger.LogWarning(ex, "I-frame trickplay extraction failed, will attempt standard way. Input: {InputFile}", inputFile);
+            }
+
+            return await ExtractVideoImagesOnIntervalInternal(inputArg, filterParam, vidEncoder, threads, qualityScale, priority, cancellationToken).ConfigureAwait(false);
         }
 
         private async Task<string> ExtractVideoImagesOnIntervalInternal(
@@ -1046,11 +1119,8 @@ namespace MediaBrowser.MediaEncoding.Encoder
                     }
                 }
 
-                var exitCode = ranToCompletion ? processWrapper.ExitCode ?? 0 : -1;
-
-                if (exitCode == -1)
+                if (!ranToCompletion || processWrapper.ExitCode != 0)
                 {
-                    _logger.LogError("ffmpeg image extraction failed for {ProcessDescription}", processDescription);
                     // Cleanup temp folder here, because the targetDirectory is not returned and the cleanup for failed ffmpeg process is not possible for caller.
                     // Ideally the ffmpeg should not write any files if it fails, but it seems like it is not guaranteed.
                     try
@@ -1085,6 +1155,24 @@ namespace MediaBrowser.MediaEncoding.Encoder
         {
             process.Process.Start();
 
+            if (_canSetProcessPriority)
+            {
+                try
+                {
+                    process.Process.PriorityClass = ProcessPriorityClass.BelowNormal;
+                }
+                catch (InvalidOperationException)
+                {
+                    // The process finished before its priority could be lowered. That says nothing
+                    // about whether the platform allows it, so keep the capability for the next one.
+                }
+                catch (Exception ex)
+                {
+                    _canSetProcessPriority = false;
+                    _logger.LogWarning(ex, "Unable to set process priority to BelowNormal for {ProcessFileName}. Further attempts will be skipped.", process.Process.StartInfo.FileName);
+                }
+            }
+
             lock (_runningProcessesLock)
             {
                 _runningProcesses.Add(process);
@@ -1117,14 +1205,14 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
         private void StopProcesses()
         {
-            List<ProcessWrapper> proceses;
+            List<ProcessWrapper> processes;
             lock (_runningProcessesLock)
             {
-                proceses = _runningProcesses.ToList();
+                processes = _runningProcesses.ToList();
                 _runningProcesses.Clear();
             }
 
-            foreach (var process in proceses)
+            foreach (var process in processes)
             {
                 if (!process.HasExited)
                 {
@@ -1284,15 +1372,22 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
         public bool CanExtractSubtitles(string codec)
         {
-            // TODO is there ever a case when a subtitle can't be extracted??
-            return true;
+            return _configurationManager.GetEncodingOptions().EnableSubtitleExtraction;
         }
 
-        private sealed class ProcessWrapper : IDisposable
+        internal sealed class ProcessWrapper : IDisposable
         {
             private readonly MediaEncoder _mediaEncoder;
 
+            // The exit event is raised on the thread pool, so it writes the state below while the
+            // caller that started the process is reading it.
+            private readonly Lock _exitLock = new();
+
             private bool _disposed = false;
+
+            private bool _hasExited;
+
+            private int? _exitCode;
 
             public ProcessWrapper(Process process, MediaEncoder mediaEncoder)
             {
@@ -1303,49 +1398,84 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
             public Process Process { get; }
 
-            public bool HasExited { get; private set; }
+            // The exit event can lag behind the wait that returned, so ask the process rather than
+            // report one that has exited as still running.
+            public bool HasExited => ReadExitState().HasExited;
 
-            public int? ExitCode { get; private set; }
+            // As above: rather than report no exit code for a process that has one.
+            public int? ExitCode => ReadExitState().ExitCode;
+
+            private (bool HasExited, int? ExitCode) ReadExitState()
+            {
+                lock (_exitLock)
+                {
+                    if (!_hasExited && !_disposed)
+                    {
+                        try
+                        {
+                            if (Process.HasExited)
+                            {
+                                _hasExited = true;
+                                _exitCode = Process.ExitCode;
+                            }
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            // No process is associated with this object, or it was disposed from
+                            // under us - ObjectDisposedException derives from this one.
+                        }
+                    }
+
+                    return (_hasExited, _exitCode);
+                }
+            }
 
             private void OnProcessExited(object sender, EventArgs e)
             {
                 var process = (Process)sender;
 
-                HasExited = true;
-
-                try
+                lock (_exitLock)
                 {
-                    ExitCode = process.ExitCode;
-                }
-                catch
-                {
+                    _hasExited = true;
+
+                    try
+                    {
+                        _exitCode = process.ExitCode;
+                    }
+                    catch
+                    {
+                    }
                 }
 
-                DisposeProcess(process);
+                // Only stop tracking it. The caller that started the process still holds it to read
+                // its output and its exit code, so disposing it here handed whoever was quickest to
+                // exit - an ffprobe on a file it rejects outright - an ObjectDisposedException.
+                Untrack();
             }
 
-            private void DisposeProcess(Process process)
+            private void Untrack()
             {
                 lock (_mediaEncoder._runningProcessesLock)
                 {
                     _mediaEncoder._runningProcesses.Remove(this);
                 }
-
-                process.Dispose();
             }
 
             public void Dispose()
             {
-                if (!_disposed)
+                lock (_exitLock)
                 {
-                    if (Process is not null)
+                    if (_disposed)
                     {
-                        Process.Exited -= OnProcessExited;
-                        DisposeProcess(Process);
+                        return;
                     }
+
+                    _disposed = true;
                 }
 
-                _disposed = true;
+                Process.Exited -= OnProcessExited;
+                Untrack();
+                Process.Dispose();
             }
         }
     }

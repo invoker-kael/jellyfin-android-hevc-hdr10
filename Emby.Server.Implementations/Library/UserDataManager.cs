@@ -1,17 +1,20 @@
+#pragma warning disable RS0030 // Do not use banned APIs
+
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Threading;
-using Jellyfin.Data.Entities;
+using BitFaster.Caching.Lru;
+using Jellyfin.Database.Implementations;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
+using Microsoft.EntityFrameworkCore;
 using AudioBook = MediaBrowser.Controller.Entities.AudioBook;
 using Book = MediaBrowser.Controller.Entities.Book;
 
@@ -22,27 +25,22 @@ namespace Emby.Server.Implementations.Library
     /// </summary>
     public class UserDataManager : IUserDataManager
     {
-        private readonly ConcurrentDictionary<string, UserItemData> _userData =
-            new ConcurrentDictionary<string, UserItemData>(StringComparer.OrdinalIgnoreCase);
-
         private readonly IServerConfigurationManager _config;
-        private readonly IUserManager _userManager;
-        private readonly IUserDataRepository _repository;
+        private readonly IDbContextFactory<JellyfinDbContext> _repository;
+        private readonly FastConcurrentLru<string, UserItemData> _cache;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="UserDataManager"/> class.
         /// </summary>
         /// <param name="config">Instance of the <see cref="IServerConfigurationManager"/> interface.</param>
-        /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
-        /// <param name="repository">Instance of the <see cref="IUserDataRepository"/> interface.</param>
+        /// <param name="repository">Instance of the <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
         public UserDataManager(
             IServerConfigurationManager config,
-            IUserManager userManager,
-            IUserDataRepository repository)
+            IDbContextFactory<JellyfinDbContext> repository)
         {
             _config = config;
-            _userManager = userManager;
             _repository = repository;
+            _cache = new FastConcurrentLru<string, UserItemData>(Environment.ProcessorCount, _config.Configuration.CacheSize, StringComparer.OrdinalIgnoreCase);
         }
 
         /// <inheritdoc />
@@ -59,15 +57,46 @@ namespace Emby.Server.Implementations.Library
 
             var keys = item.GetUserDataKeys();
 
-            var userId = user.InternalId;
+            using var dbContext = _repository.CreateDbContext();
+            using var transaction = dbContext.Database.BeginTransaction();
 
             foreach (var key in keys)
             {
-                _repository.SaveUserData(userId, key, userData, cancellationToken);
+                userData.Key = key;
+                var userDataEntry = Map(userData, user.Id, item.Id);
+                if (dbContext.UserData.Any(f => f.ItemId == userDataEntry.ItemId && f.UserId == userDataEntry.UserId && f.CustomDataKey == userDataEntry.CustomDataKey))
+                {
+                    dbContext.UserData.Attach(userDataEntry).State = EntityState.Modified;
+                }
+                else
+                {
+                    dbContext.UserData.Add(userDataEntry);
+                }
             }
 
+            dbContext.SaveChanges();
+
+            // Rows under keys the item no longer reports are kept, not deleted: the key set is briefly
+            // incomplete mid-refresh, and those rows are what a deleted and re-added item reattaches by.
+            dbContext.UserData
+                .Where(e => e.ItemId == item.Id && e.UserId == user.Id && !keys.Contains(e.CustomDataKey))
+                .ExecuteUpdate(e => e
+                    .SetProperty(f => f.AudioStreamIndex, userData.AudioStreamIndex)
+                    .SetProperty(f => f.IsFavorite, userData.IsFavorite)
+                    .SetProperty(f => f.LastPlayedDate, userData.LastPlayedDate)
+                    .SetProperty(f => f.Likes, userData.Likes)
+                    .SetProperty(f => f.PlaybackPositionTicks, userData.PlaybackPositionTicks)
+                    .SetProperty(f => f.PlayCount, userData.PlayCount)
+                    .SetProperty(f => f.Played, userData.Played)
+                    .SetProperty(f => f.Rating, userData.Rating)
+                    .SetProperty(f => f.SubtitleStreamIndex, userData.SubtitleStreamIndex));
+
+            transaction.Commit();
+
+            var userId = user.InternalId;
             var cacheKey = GetCacheKey(userId, item.Id);
-            _userData.AddOrUpdate(cacheKey, userData, (_, _) => userData);
+            _cache.AddOrUpdate(cacheKey, userData);
+            item.UserData = dbContext.UserData.Where(e => e.ItemId == item.Id).AsNoTracking().ToArray(); // rehydrate the cached userdata
 
             UserDataSaved?.Invoke(this, new UserDataSaveEventArgs
             {
@@ -84,10 +113,9 @@ namespace Emby.Server.Implementations.Library
         {
             ArgumentNullException.ThrowIfNull(user);
             ArgumentNullException.ThrowIfNull(item);
-            ArgumentNullException.ThrowIfNull(reason);
             ArgumentNullException.ThrowIfNull(userDataDto);
 
-            var userData = GetUserData(user, item);
+            var userData = GetUserData(user, item) ?? throw new InvalidOperationException("UserData should not be null.");
 
             if (userDataDto.PlaybackPositionTicks.HasValue)
             {
@@ -127,33 +155,205 @@ namespace Emby.Server.Implementations.Library
             SaveUserData(user, item, userData, reason, CancellationToken.None);
         }
 
-        private UserItemData GetUserData(User user, Guid itemId, List<string> keys)
+        private UserData Map(UserItemData dto, Guid userId, Guid itemId)
         {
-            var userId = user.InternalId;
-
-            var cacheKey = GetCacheKey(userId, itemId);
-
-            return _userData.GetOrAdd(cacheKey, _ => GetUserDataInternal(userId, keys));
+            return new UserData()
+            {
+                ItemId = itemId,
+                CustomDataKey = dto.Key,
+                Item = null,
+                User = null,
+                AudioStreamIndex = dto.AudioStreamIndex,
+                IsFavorite = dto.IsFavorite,
+                LastPlayedDate = dto.LastPlayedDate,
+                Likes = dto.Likes,
+                PlaybackPositionTicks = dto.PlaybackPositionTicks,
+                PlayCount = dto.PlayCount,
+                Played = dto.Played,
+                Rating = dto.Rating,
+                UserId = userId,
+                SubtitleStreamIndex = dto.SubtitleStreamIndex,
+            };
         }
 
-        private UserItemData GetUserDataInternal(long internalUserId, List<string> keys)
+        private static UserItemData Map(UserData dto)
         {
-            var userData = _repository.GetUserData(internalUserId, keys);
-
-            if (userData is not null)
+            return new UserItemData()
             {
-                return userData;
-            }
+                Key = dto.CustomDataKey!,
+                AudioStreamIndex = dto.AudioStreamIndex,
+                IsFavorite = dto.IsFavorite,
+                LastPlayedDate = dto.LastPlayedDate,
+                Likes = dto.Likes,
+                PlaybackPositionTicks = dto.PlaybackPositionTicks,
+                PlayCount = dto.PlayCount,
+                Played = dto.Played,
+                Rating = dto.Rating,
+                SubtitleStreamIndex = dto.SubtitleStreamIndex,
+            };
+        }
 
-            if (keys.Count > 0)
+        /// <inheritdoc />
+        public Dictionary<Guid, UserItemData> GetUserDataBatch(IReadOnlyList<BaseItem> items, User user)
+        {
+            var result = new Dictionary<Guid, UserItemData>(items.Count);
+            var itemsNeedingQuery = new List<(BaseItem Item, List<string> Keys)>();
+
+            foreach (var item in items)
             {
-                return new UserItemData
+                var cacheKey = GetCacheKey(user.InternalId, item.Id);
+                if (_cache.TryGet(cacheKey, out var cachedData))
                 {
-                    Key = keys[0]
-                };
+                    result[item.Id] = cachedData;
+                }
+                else
+                {
+                    var userDataRow = ResolveUserDataRow(item, item.UserData?.Where(e => e.UserId.Equals(user.Id)));
+                    var userData = userDataRow is not null ? Map(userDataRow) : null;
+                    if (userData is not null)
+                    {
+                        result[item.Id] = userData;
+                        _cache.AddOrUpdate(cacheKey, userData);
+                    }
+                    else
+                    {
+                        var keys = item.GetUserDataKeys();
+                        itemsNeedingQuery.Add((item, keys));
+                    }
+                }
             }
 
-            throw new UnreachableException();
+            if (itemsNeedingQuery.Count == 0)
+            {
+                return result;
+            }
+
+            // Build a single query for all missing items. Fetch rows by item alone so rows kept
+            // under keys from older metadata resolve the same way as the in-memory path.
+            var allItemIds = itemsNeedingQuery.Select(x => x.Item.Id).ToList();
+            using var context = _repository.CreateDbContext();
+            var userDataArray = context.UserData
+                .AsNoTracking()
+                .Where(e => e.UserId.Equals(user.Id))
+                .WhereOneOrMany(allItemIds, e => e.ItemId)
+                .ToArray();
+
+            var userDataByItem = userDataArray.GroupBy(e => e.ItemId).ToDictionary(g => g.Key, g => g.ToArray());
+            foreach (var (item, keys) in itemsNeedingQuery)
+            {
+                UserItemData userData;
+                if (userDataByItem.TryGetValue(item.Id, out var itemUserData) && itemUserData.Length > 0)
+                {
+                    userData = Map(ResolveUserDataRow(item, itemUserData)!);
+                }
+                else
+                {
+                    userData = new UserItemData { Key = keys.Count > 0 ? keys[0] : string.Empty };
+                }
+
+                result[item.Id] = userData;
+                var cacheKey = GetCacheKey(user.InternalId, item.Id);
+                _cache.AddOrUpdate(cacheKey, userData);
+            }
+
+            return result;
+        }
+
+        /// <inheritdoc />
+        public VersionResumeData? GetResumeUserData(User user, BaseItem item)
+        {
+            return GetResumeUserDataBatch([item], user).GetValueOrDefault(item.Id);
+        }
+
+        /// <inheritdoc />
+        public IReadOnlyDictionary<Guid, VersionResumeData> GetResumeUserDataBatch(IReadOnlyList<BaseItem> items, User user)
+        {
+            ArgumentNullException.ThrowIfNull(user);
+
+            var result = new Dictionary<Guid, VersionResumeData>();
+
+            // Candidate primaries: a directly queried version (PrimaryVersionId set) keeps its own data.
+            // Linked alternates are already known in memory; only the local-alternate existence check
+            // would otherwise hit the database (one query per item via Video.HasLocalAlternateVersions),
+            // so collect those ids and resolve them all in a single query below.
+            List<Video>? candidates = null;
+            List<Guid>? localProbeIds = null;
+            foreach (var item in items)
+            {
+                if (item is not Video video || video.PrimaryVersionId.HasValue)
+                {
+                    continue;
+                }
+
+                (candidates ??= []).Add(video);
+
+                if (video.LinkedAlternateVersions.Length == 0)
+                {
+                    (localProbeIds ??= []).Add(video.Id);
+                }
+            }
+
+            if (candidates is null)
+            {
+                return result;
+            }
+
+            HashSet<Guid>? withLocalAlternates = null;
+            if (localProbeIds is not null)
+            {
+                using var dbContext = _repository.CreateDbContext();
+                withLocalAlternates = dbContext.LinkedChildren
+                    .Where(lc => lc.ChildType == Jellyfin.Database.Implementations.Entities.LinkedChildType.LocalAlternateVersion)
+                    .WhereOneOrMany(localProbeIds, lc => lc.ParentId)
+                    .Select(lc => lc.ParentId)
+                    .Distinct()
+                    .ToHashSet();
+            }
+
+            List<(Guid PrimaryId, IReadOnlyList<Video> Versions)>? versionGroups = null;
+            List<BaseItem>? allVersions = null;
+
+            foreach (var video in candidates)
+            {
+                // Only items that actually have alternate versions aggregate over them.
+                if (video.LinkedAlternateVersions.Length == 0
+                    && (withLocalAlternates is null || !withLocalAlternates.Contains(video.Id)))
+                {
+                    continue;
+                }
+
+                var versions = video.GetAllVersions();
+                if (versions.Count < 2)
+                {
+                    continue;
+                }
+
+                (versionGroups ??= []).Add((video.Id, versions));
+                (allVersions ??= []).AddRange(versions);
+            }
+
+            if (versionGroups is null)
+            {
+                return result;
+            }
+
+            var userDataByVersion = GetUserDataBatch(allVersions!.DistinctBy(i => i.Id).ToList(), user);
+
+            foreach (var (primaryId, versions) in versionGroups)
+            {
+                // Consider both in-progress and completed versions so a finished alternate still marks the primary as played.
+                var resumeVersion = VersionPlaybackSelector.SelectMostRecentlyPlayed(
+                    versions,
+                    version => userDataByVersion.GetValueOrDefault(version.Id),
+                    data => data.PlaybackPositionTicks > 0 || data.Played);
+
+                if (resumeVersion is not null)
+                {
+                    result[primaryId] = new VersionResumeData(resumeVersion.Id, userDataByVersion[resumeVersion.Id]);
+                }
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -166,22 +366,63 @@ namespace Emby.Server.Implementations.Library
         }
 
         /// <inheritdoc />
-        public UserItemData GetUserData(User user, BaseItem item)
+        public UserItemData? GetUserData(User user, BaseItem item)
         {
-            return GetUserData(user, item.Id, item.GetUserDataKeys());
+            ArgumentNullException.ThrowIfNull(user);
+            var row = ResolveUserDataRow(item, item.UserData?.Where(e => e.UserId.Equals(user.Id)));
+            return row is not null ? Map(row) : new UserItemData()
+            {
+                Key = item.GetUserDataKeys()[0],
+            };
+        }
+
+        /// <summary>
+        /// Picks the row matching the item's current user data keys, in key order, so rows left behind
+        /// under keys from older metadata don't take priority over the rows the write path updates.
+        /// </summary>
+        /// <param name="item">The item whose keys to match.</param>
+        /// <param name="rows">The candidate user data rows for a single user.</param>
+        /// <returns>The best matching row, or <c>null</c> when there are none.</returns>
+        private static UserData? ResolveUserDataRow(BaseItem item, IEnumerable<UserData>? rows)
+        {
+            var candidates = rows?.ToList();
+            if (candidates is null || candidates.Count == 0)
+            {
+                return null;
+            }
+
+            foreach (var key in item.GetUserDataKeys())
+            {
+                var match = candidates.Find(e => string.Equals(e.CustomDataKey, key, StringComparison.Ordinal));
+                if (match is not null)
+                {
+                    return match;
+                }
+            }
+
+            return candidates[0];
         }
 
         /// <inheritdoc />
-        public UserItemDataDto GetUserDataDto(BaseItem item, User user)
+        public UserItemDataDto? GetUserDataDto(BaseItem item, User user)
             => GetUserDataDto(item, null, user, new DtoOptions());
 
         /// <inheritdoc />
-        public UserItemDataDto GetUserDataDto(BaseItem item, BaseItemDto? itemDto, User user, DtoOptions options)
+        public UserItemDataDto? GetUserDataDto(BaseItem item, BaseItemDto? itemDto, User user, DtoOptions options)
         {
             var userData = GetUserData(user, item);
-            var dto = GetUserItemDataDto(userData);
+            if (userData is null)
+            {
+                return null;
+            }
+
+            var dto = GetUserItemDataDto(userData, item.Id);
 
             item.FillUserDataDtoValues(dto, userData, itemDto, user, options);
+
+            // For an item with alternate versions, surface the most recently played version's resume point.
+            GetResumeUserData(user, item)?.ApplyTo(dto);
+
             return dto;
         }
 
@@ -189,9 +430,10 @@ namespace Emby.Server.Implementations.Library
         /// Converts a UserItemData to a DTOUserItemData.
         /// </summary>
         /// <param name="data">The data.</param>
+        /// <param name="itemId">The reference key to an Item.</param>
         /// <returns>DtoUserItemData.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="data"/> is <c>null</c>.</exception>
-        private UserItemDataDto GetUserItemDataDto(UserItemData data)
+        private UserItemDataDto GetUserItemDataDto(UserItemData data, Guid itemId)
         {
             ArgumentNullException.ThrowIfNull(data);
 
@@ -204,6 +446,7 @@ namespace Emby.Server.Implementations.Library
                 Rating = data.Rating,
                 Played = data.Played,
                 LastPlayedDate = data.LastPlayedDate,
+                ItemId = itemId,
                 Key = data.Key
             };
         }
@@ -228,7 +471,7 @@ namespace Emby.Server.Implementations.Library
                     // ignore progress during the beginning
                     positionTicks = 0;
                 }
-                else if (pctIn > _config.Configuration.MaxResumePct || positionTicks >= runtimeTicks)
+                else if (pctIn > _config.Configuration.MaxResumePct || positionTicks >= (runtimeTicks - TimeSpan.TicksPerSecond))
                 {
                     // mark as completed close to the end
                     positionTicks = 0;
@@ -283,6 +526,42 @@ namespace Emby.Server.Implementations.Library
             data.PlaybackPositionTicks = positionTicks;
 
             return playedToCompletion;
+        }
+
+        /// <inheritdoc />
+        public void ResetPlaybackStreamSelections(User user, BaseItem item)
+        {
+            ArgumentNullException.ThrowIfNull(user);
+            ArgumentNullException.ThrowIfNull(item);
+
+            using var dbContext = _repository.CreateDbContext();
+            var rows = dbContext.UserData
+                .Where(e => e.ItemId == item.Id && e.UserId == user.Id
+                            && (e.AudioStreamIndex != null || e.SubtitleStreamIndex != null))
+                .ToList();
+
+            if (rows.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var row in rows)
+            {
+                row.AudioStreamIndex = null;
+                row.SubtitleStreamIndex = null;
+            }
+
+            dbContext.SaveChanges();
+
+            var cacheKey = GetCacheKey(user.InternalId, item.Id);
+            if (_cache.TryGet(cacheKey, out var cached))
+            {
+                cached.AudioStreamIndex = null;
+                cached.SubtitleStreamIndex = null;
+                _cache.AddOrUpdate(cacheKey, cached);
+            }
+
+            item.UserData = dbContext.UserData.Where(e => e.ItemId == item.Id).AsNoTracking().ToArray();
         }
     }
 }

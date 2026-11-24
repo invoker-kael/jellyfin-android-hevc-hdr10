@@ -176,6 +176,30 @@ namespace Jellyfin.LiveTv.Tests.SchedulesDirect
         }
 
         /// <summary>
+        /// /metadata/programs response where the daily image limit is hit mid-batch,
+        /// so individual entries carry an error code inside an otherwise successful response.
+        /// </summary>
+        [Fact]
+        public void Deserialize_Metadata_Programs_Image_Limit_Response_Success()
+        {
+            var bytes = File.ReadAllBytes("Test Data/SchedulesDirect/metadata_programs_image_limit_response.json");
+            var showImagesDtos = JsonSerializer.Deserialize<IReadOnlyList<ShowImagesDto>>(bytes, _jsonOptions);
+
+            Assert.NotNull(showImagesDtos);
+            Assert.Equal(2, showImagesDtos!.Count);
+
+            // First entry is a normal result with image data and no error code.
+            Assert.Equal("SH00712240", showImagesDtos[0].ProgramId);
+            Assert.Null(showImagesDtos[0].Code);
+            Assert.Single(showImagesDtos[0].Data);
+
+            // Second entry is a per-entry trial image download limit error (SD code 5003).
+            Assert.Equal("SH00712241", showImagesDtos[1].ProgramId);
+            Assert.Equal((int)SdErrorCode.MaxImageDownloadsTrial, showImagesDtos[1].Code);
+            Assert.Empty(showImagesDtos[1].Data);
+        }
+
+        /// <summary>
         /// /headends response.
         /// </summary>
         [Fact]
@@ -232,7 +256,7 @@ namespace Jellyfin.LiveTv.Tests.SchedulesDirect
             Assert.Equal(2, channelDto!.Map.Count);
             Assert.Equal("24326", channelDto.Map[0].StationId);
             Assert.Equal("001", channelDto.Map[0].Channel);
-            Assert.Equal("BBC ONE South", channelDto.Map[0].ProvderCallsign);
+            Assert.Equal("BBC ONE South", channelDto.Map[0].ProviderCallsign);
             Assert.Equal("1", channelDto.Map[0].LogicalChannelNumber);
             Assert.Equal("providerCallsign", channelDto.Map[0].MatchType);
         }

@@ -9,8 +9,10 @@ using System.Linq;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Data.Entities;
+using Jellyfin.Data;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Audio;
@@ -137,27 +139,29 @@ namespace MediaBrowser.Controller.Playlists
             return Task.CompletedTask;
         }
 
-        public override List<BaseItem> GetChildren(User user, bool includeLinkedChildren, InternalItemsQuery query)
+        public override IReadOnlyList<BaseItem> GetChildren(User user, bool includeLinkedChildren, InternalItemsQuery query)
         {
             return GetPlayableItems(user, query);
         }
 
-        protected override IEnumerable<BaseItem> GetNonCachedChildren(IDirectoryService directoryService)
+        protected override IReadOnlyList<BaseItem> GetNonCachedChildren(IDirectoryService directoryService)
         {
             return [];
         }
 
-        public override IEnumerable<BaseItem> GetRecursiveChildren(User user, InternalItemsQuery query)
+        public override IReadOnlyList<BaseItem> GetRecursiveChildren(User user, InternalItemsQuery query, out int totalCount)
         {
-            return GetPlayableItems(user, query);
+            var items = GetPlayableItems(user, query);
+            totalCount = items.Count;
+            return items;
         }
 
-        public IEnumerable<Tuple<LinkedChild, BaseItem>> GetManageableItems()
+        public IReadOnlyList<Tuple<LinkedChild, BaseItem>> GetManageableItems()
         {
             return GetLinkedChildrenInfos();
         }
 
-        private List<BaseItem> GetPlayableItems(User user, InternalItemsQuery query)
+        private IReadOnlyList<BaseItem> GetPlayableItems(User user, InternalItemsQuery query)
         {
             query ??= new InternalItemsQuery(user);
 
@@ -231,18 +235,18 @@ namespace MediaBrowser.Controller.Playlists
         {
             if (!IsSharedItem)
             {
-                return base.IsVisible(user, skipAllowedTagsCheck);
+                return base.IsVisible(user, skipAllowedTagsCheck) && HasParentalAllowedChild(user);
             }
 
             if (OpenAccess)
             {
-                return true;
+                return HasParentalAllowedChild(user);
             }
 
             var userId = user.Id;
             if (userId.Equals(OwnerUserId))
             {
-                return true;
+                return HasParentalAllowedChild(user);
             }
 
             var shares = Shares;
@@ -251,7 +255,19 @@ namespace MediaBrowser.Controller.Playlists
                 return false;
             }
 
-            return shares.Any(s => s.UserId.Equals(userId));
+            return shares.Any(s => s.UserId.Equals(userId)) && HasParentalAllowedChild(user);
+        }
+
+        private bool HasParentalAllowedChild(User user)
+        {
+            if (!user.MaxParentalRatingScore.HasValue)
+            {
+                return true;
+            }
+
+            var linkedItems = GetLinkedChildren();
+
+            return linkedItems.Count == 0 || linkedItems.Any(child => child.IsParentalAllowed(user, true));
         }
 
         public override bool CanDelete(User user)

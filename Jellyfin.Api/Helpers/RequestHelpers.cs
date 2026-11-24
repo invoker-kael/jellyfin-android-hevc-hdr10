@@ -5,8 +5,8 @@ using System.Security.Claims;
 using System.Threading.Tasks;
 using Jellyfin.Api.Constants;
 using Jellyfin.Api.Extensions;
-using Jellyfin.Data.Entities;
-using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions;
 using MediaBrowser.Common.Extensions;
 using MediaBrowser.Controller.Dto;
@@ -30,15 +30,16 @@ public static class RequestHelpers
     /// </summary>
     /// <param name="sortBy">Sort By. Comma delimited string.</param>
     /// <param name="requestedSortOrder">Sort Order. Comma delimited string.</param>
+    /// <typeparam name="TSortBy">The type of the sort by field.</typeparam>
     /// <returns>Order By.</returns>
-    public static (ItemSortBy, SortOrder)[] GetOrderBy(IReadOnlyList<ItemSortBy> sortBy, IReadOnlyList<SortOrder> requestedSortOrder)
+    public static (TSortBy, SortOrder)[] GetOrderBy<TSortBy>(IReadOnlyList<TSortBy> sortBy, IReadOnlyList<SortOrder> requestedSortOrder)
     {
         if (sortBy.Count == 0)
         {
-            return Array.Empty<(ItemSortBy, SortOrder)>();
+            return Array.Empty<(TSortBy, SortOrder)>();
         }
 
-        var result = new (ItemSortBy, SortOrder)[sortBy.Count];
+        var result = new (TSortBy, SortOrder)[sortBy.Count];
         var i = 0;
         // Add elements which have a SortOrder specified
         for (; i < requestedSortOrder.Count; i++)
@@ -110,7 +111,16 @@ public static class RequestHelpers
         return user.EnableUserPreferenceAccess;
     }
 
-    internal static async Task<SessionInfo> GetSession(ISessionManager sessionManager, IUserManager userManager, HttpContext httpContext, Guid? userId = null)
+    /// <summary>
+    /// Get the session based on http request.
+    /// </summary>
+    /// <param name="sessionManager">The session manager.</param>
+    /// <param name="userManager">The user manager.</param>
+    /// <param name="httpContext">The http context.</param>
+    /// <param name="userId">The optional userid.</param>
+    /// <returns>The session.</returns>
+    /// <exception cref="ResourceNotFoundException">Session not found.</exception>
+    public static async Task<SessionInfo> GetSession(ISessionManager sessionManager, IUserManager userManager, HttpContext httpContext, Guid? userId = null)
     {
         userId ??= httpContext.User.GetUserId();
         User? user = null;
@@ -146,7 +156,6 @@ public static class RequestHelpers
         QueryResult<(BaseItem Item, ItemCounts ItemCounts)> result,
         DtoOptions dtoOptions,
         IDtoService dtoService,
-        bool includeItemTypes,
         User? user)
     {
         var dtos = result.Items.Select(i =>
@@ -154,7 +163,7 @@ public static class RequestHelpers
             var (baseItem, counts) = i;
             var dto = dtoService.GetItemByNameDto(baseItem, dtoOptions, null, user);
 
-            if (includeItemTypes)
+            if (counts is not null)
             {
                 dto.ChildCount = counts.ItemCount;
                 dto.ProgramCount = counts.ProgramCount;
@@ -165,6 +174,7 @@ public static class RequestHelpers
                 dto.AlbumCount = counts.AlbumCount;
                 dto.SongCount = counts.SongCount;
                 dto.ArtistCount = counts.ArtistCount;
+                dto.MusicVideoCount = counts.MusicVideoCount;
             }
 
             return dto;

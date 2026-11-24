@@ -8,8 +8,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Api.Extensions;
-using Jellyfin.Data.Entities;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Extensions;
@@ -154,7 +154,7 @@ public class DynamicHlsHelper
         // from universal audio service, need to override the AudioCodec when the actual request differs from original query
         if (!string.Equals(state.OutputAudioCodec, _httpContextAccessor.HttpContext.Request.Query["AudioCodec"].ToString(), StringComparison.OrdinalIgnoreCase))
         {
-            var newQuery = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(_httpContextAccessor.HttpContext.Request.QueryString.ToString());
+            var newQuery = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(queryString);
             newQuery["AudioCodec"] = state.OutputAudioCodec;
             queryString = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(string.Empty, newQuery);
         }
@@ -173,10 +173,21 @@ public class DynamicHlsHelper
             queryString += "&TranscodeReasons=" + state.Request.TranscodeReasons;
         }
 
-        // Main stream
-        var playlistUrl = isLiveStream ? "live.m3u8" : "main.m3u8";
+        // Video rotation metadata is only supported in fMP4 remuxing
+        if (state.VideoStream is not null
+            && state.VideoRequest is not null
+            && (state.VideoStream?.Rotation ?? 0) != 0
+            && EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
+            && !string.IsNullOrWhiteSpace(state.Request.SegmentContainer)
+            && !string.Equals(state.Request.SegmentContainer, "mp4", StringComparison.OrdinalIgnoreCase))
+        {
+            queryString += "&AllowVideoStreamCopy=false";
+        }
 
-        playlistUrl += queryString;
+        // Main stream
+        var baseUrl = isLiveStream ? "live.m3u8" : "main.m3u8";
+        var playlistUrl = baseUrl + queryString;
+        var playlistQuery = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(queryString);
 
         var subtitleStreams = state.MediaSource
             .MediaStreams
@@ -198,15 +209,23 @@ public class DynamicHlsHelper
             AddSubtitles(state, subtitleStreams, builder, _httpContextAccessor.HttpContext.User);
         }
 
-        // Video rotation metadata is only supported in fMP4 remuxing
+        // For DoVi profiles without a compatible base layer (P5 HEVC, P10/bl0 AV1),
+        // add a spec-compliant dvh1/dav1 variant before the hvc1 hack variant.
+        // SUPPLEMENTAL-CODECS cannot be used for these profiles (no compatible BL to supplement).
+        // The DoVi variant is listed first so spec-compliant clients (Apple TV, webOS 24+)
+        // select it over the fallback when both have identical BANDWIDTH.
+        // Only emit for clients that explicitly declared DOVI support to avoid breaking
+        // non-compliant players that don't recognize dvh1/dav1 CODECS strings.
         if (state.VideoStream is not null
             && state.VideoRequest is not null
-            && (state.VideoStream?.Rotation ?? 0) != 0
             && EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
-            && !string.IsNullOrWhiteSpace(state.Request.SegmentContainer)
-            && !string.Equals(state.Request.SegmentContainer, "mp4", StringComparison.OrdinalIgnoreCase))
+            && state.VideoStream.VideoRangeType == VideoRangeType.DOVI
+            && state.VideoStream.DvProfile.HasValue
+            && state.VideoStream.DvLevel.HasValue
+            && state.GetRequestedRangeTypes(state.VideoStream.Codec)
+                .Contains(VideoRangeType.DOVI.ToString(), StringComparison.OrdinalIgnoreCase))
         {
-            playlistUrl += "&AllowVideoStreamCopy=false";
+            AppendDoviPlaylist(builder, state, playlistUrl, totalBitrate, subtitleGroup);
         }
 
         var basicPlaylist = AppendPlaylist(builder, state, playlistUrl, totalBitrate, subtitleGroup);
@@ -215,20 +234,30 @@ public class DynamicHlsHelper
         {
             var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
 
-            // Provide SDR HEVC entrance for backward compatibility.
-            if (encodingOptions.AllowHevcEncoding
-                && !encodingOptions.AllowAv1Encoding
-                && EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
-                && state.VideoStream.VideoRange == VideoRange.HDR
-                && string.Equals(state.ActualOutputVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase))
+            // Provide AV1 and HEVC SDR entrances for backward compatibility.
+            foreach (var sdrVideoCodec in new[] { "av1", "hevc" })
             {
-                var requestedVideoProfiles = state.GetRequestedProfiles("hevc");
-                if (requestedVideoProfiles is not null && requestedVideoProfiles.Length > 0)
+                var isAv1EncodingAllowed = encodingOptions.AllowAv1Encoding
+                    && string.Equals(sdrVideoCodec, "av1", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(state.ActualOutputVideoCodec, "av1", StringComparison.OrdinalIgnoreCase);
+                var isHevcEncodingAllowed = encodingOptions.AllowHevcEncoding
+                    && string.Equals(sdrVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(state.ActualOutputVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase);
+                var isEncodingAllowed = isAv1EncodingAllowed || isHevcEncodingAllowed;
+
+                if (isEncodingAllowed
+                    && EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
+                    && state.VideoStream.VideoRange == VideoRange.HDR)
                 {
-                    // Force HEVC Main Profile and disable video stream copy.
-                    state.OutputVideoCodec = "hevc";
-                    var sdrVideoUrl = ReplaceProfile(playlistUrl, "hevc", string.Join(',', requestedVideoProfiles), "main");
-                    sdrVideoUrl += "&AllowVideoStreamCopy=false";
+                    // Force AV1 and HEVC Main Profile and disable video stream copy.
+                    state.OutputVideoCodec = sdrVideoCodec;
+
+                    var sdrPlaylistQuery = playlistQuery;
+                    sdrPlaylistQuery["VideoCodec"] = sdrVideoCodec;
+                    sdrPlaylistQuery[sdrVideoCodec + "-profile"] = "main";
+                    sdrPlaylistQuery["AllowVideoStreamCopy"] = "false";
+
+                    var sdrVideoUrl = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(baseUrl, sdrPlaylistQuery);
 
                     // HACK: Use the same bitrate so that the client can choose by other attributes, such as color range.
                     AppendPlaylist(builder, state, sdrVideoUrl, totalBitrate, subtitleGroup);
@@ -238,12 +267,30 @@ public class DynamicHlsHelper
                 }
             }
 
+            // Provide H.264 SDR entrance for backward compatibility.
+            if (EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
+                && state.VideoStream.VideoRange == VideoRange.HDR)
+            {
+                // Force H.264 and disable video stream copy.
+                state.OutputVideoCodec = "h264";
+
+                var sdrPlaylistQuery = playlistQuery;
+                sdrPlaylistQuery["VideoCodec"] = "h264";
+                sdrPlaylistQuery["AllowVideoStreamCopy"] = "false";
+
+                var sdrVideoUrl = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(baseUrl, sdrPlaylistQuery);
+
+                // HACK: Use the same bitrate so that the client can choose by other attributes, such as color range.
+                AppendPlaylist(builder, state, sdrVideoUrl, totalBitrate, subtitleGroup);
+
+                // Restore the video codec
+                state.OutputVideoCodec = "copy";
+            }
+
             // Provide Level 5.0 entrance for backward compatibility.
             // e.g. Apple A10 chips refuse the master playlist containing SDR HEVC Main Level 5.1 video,
             // but in fact it is capable of playing videos up to Level 6.1.
-            if (encodingOptions.AllowHevcEncoding
-                && !encodingOptions.AllowAv1Encoding
-                && EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
+            if (EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
                 && state.VideoStream.Level.HasValue
                 && state.VideoStream.Level > 150
                 && state.VideoStream.VideoRange == VideoRange.SDR
@@ -267,18 +314,21 @@ public class DynamicHlsHelper
 
         if (EnableAdaptiveBitrateStreaming(state, isLiveStream, enableAdaptiveBitrateStreaming, _httpContextAccessor.HttpContext.GetNormalizedRemoteIP()))
         {
-            var requestedVideoBitrate = state.VideoRequest is null ? 0 : state.VideoRequest.VideoBitRate ?? 0;
+            var requestedVideoBitrate = state.VideoRequest?.VideoBitRate ?? 0;
 
             // By default, vary by just 200k
             var variation = GetBitrateVariation(totalBitrate);
 
             var newBitrate = totalBitrate - variation;
-            var variantUrl = ReplaceVideoBitrate(playlistUrl, requestedVideoBitrate, requestedVideoBitrate - variation);
+            var variantQuery = playlistQuery;
+            variantQuery["VideoBitrate"] = (requestedVideoBitrate - variation).ToString(CultureInfo.InvariantCulture);
+            var variantUrl = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(baseUrl, variantQuery);
             AppendPlaylist(builder, state, variantUrl, newBitrate, subtitleGroup);
 
             variation *= 2;
             newBitrate = totalBitrate - variation;
-            variantUrl = ReplaceVideoBitrate(playlistUrl, requestedVideoBitrate, requestedVideoBitrate - variation);
+            variantQuery["VideoBitrate"] = (requestedVideoBitrate - variation).ToString(CultureInfo.InvariantCulture);
+            variantUrl = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(baseUrl, variantQuery);
             AppendPlaylist(builder, state, variantUrl, newBitrate, subtitleGroup);
         }
 
@@ -325,6 +375,65 @@ public class DynamicHlsHelper
     }
 
     /// <summary>
+    /// Appends a Dolby Vision variant with dvh1/dav1 CODECS for profiles without a compatible
+    /// base layer (P5 HEVC, P10/bl0 AV1). This enables spec-compliant HLS clients to detect
+    /// DoVi from the manifest rather than relying on init segment inspection.
+    /// </summary>
+    /// <param name="builder">StringBuilder for the master playlist.</param>
+    /// <param name="state">StreamState of the current stream.</param>
+    /// <param name="url">Playlist URL for this variant.</param>
+    /// <param name="bitrate">Bitrate for the BANDWIDTH field.</param>
+    /// <param name="subtitleGroup">Subtitle group identifier, or null.</param>
+    private void AppendDoviPlaylist(StringBuilder builder, StreamState state, string url, int bitrate, string? subtitleGroup)
+    {
+        var dvProfile = state.VideoStream.DvProfile;
+        var dvLevel = state.VideoStream.DvLevel;
+        if (dvProfile is null || dvLevel is null)
+        {
+            return;
+        }
+
+        var playlistBuilder = new StringBuilder();
+        playlistBuilder.Append("#EXT-X-STREAM-INF:BANDWIDTH=")
+            .Append(bitrate.ToString(CultureInfo.InvariantCulture))
+            .Append(",AVERAGE-BANDWIDTH=")
+            .Append(bitrate.ToString(CultureInfo.InvariantCulture));
+
+        playlistBuilder.Append(",VIDEO-RANGE=PQ");
+
+        var dvCodec = HlsCodecStringHelpers.GetDoviString(dvProfile.Value, dvLevel.Value, state.ActualOutputVideoCodec);
+
+        string audioCodecs = string.Empty;
+        if (!string.IsNullOrEmpty(state.ActualOutputAudioCodec))
+        {
+            audioCodecs = GetPlaylistAudioCodecs(state);
+        }
+
+        playlistBuilder.Append(",CODECS=\"")
+            .Append(dvCodec);
+        if (!string.IsNullOrEmpty(audioCodecs))
+        {
+            playlistBuilder.Append(',').Append(audioCodecs);
+        }
+
+        playlistBuilder.Append('"');
+
+        AppendPlaylistResolutionField(playlistBuilder, state);
+        AppendPlaylistFramerateField(playlistBuilder, state);
+
+        if (!string.IsNullOrWhiteSpace(subtitleGroup))
+        {
+            playlistBuilder.Append(",SUBTITLES=\"")
+                .Append(subtitleGroup)
+                .Append('"');
+        }
+
+        playlistBuilder.AppendLine();
+        playlistBuilder.AppendLine(url);
+        builder.Append(playlistBuilder);
+    }
+
+    /// <summary>
     /// Appends a VIDEO-RANGE field containing the range of the output video stream.
     /// </summary>
     /// <seealso cref="AppendPlaylist(StringBuilder, StreamState, string, int, string)"/>
@@ -345,13 +454,16 @@ public class DynamicHlsHelper
 
                 if (videoRange == VideoRange.HDR)
                 {
-                    if (videoRangeType == VideoRangeType.HLG)
+                    switch (videoRangeType)
                     {
-                        builder.Append(",VIDEO-RANGE=HLG");
-                    }
-                    else
-                    {
-                        builder.Append(",VIDEO-RANGE=PQ");
+                        case VideoRangeType.HLG:
+                        case VideoRangeType.DOVIWithHLG:
+                        case VideoRangeType.DOVIInvalid when string.Equals(state.VideoStream.ColorTransfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase):
+                            builder.Append(",VIDEO-RANGE=HLG");
+                            break;
+                        default:
+                            builder.Append(",VIDEO-RANGE=PQ");
+                            break;
                     }
                 }
             }
@@ -418,36 +530,67 @@ public class DynamicHlsHelper
     /// <param name="state">StreamState of the current stream.</param>
     private void AppendPlaylistSupplementalCodecsField(StringBuilder builder, StreamState state)
     {
-        // Dolby Vision currently cannot exist when transcoding
+        // HDR dynamic metadata currently cannot exist when transcoding
         if (!EncodingHelper.IsCopyCodec(state.OutputVideoCodec))
         {
             return;
         }
 
-        var dvProfile = state.VideoStream.DvProfile;
-        var dvLevel = state.VideoStream.DvLevel;
-        var dvRangeString = state.VideoStream.VideoRangeType switch
+        if (EncodingHelper.IsDovi(state.VideoStream) && !_encodingHelper.IsDoviRemoved(state))
         {
-            VideoRangeType.DOVIWithHDR10 => "db1p",
-            VideoRangeType.DOVIWithHLG => "db4h",
-            _ => string.Empty
-        };
-
-        if (dvProfile is null || dvLevel is null || string.IsNullOrEmpty(dvRangeString))
+            AppendDvString();
+        }
+        else if (EncodingHelper.IsHdr10Plus(state.VideoStream) && !_encodingHelper.IsHdr10PlusRemoved(state))
         {
-            return;
+            AppendHdr10PlusString();
         }
 
-        var dvFourCc = string.Equals(state.ActualOutputVideoCodec, "av1", StringComparison.OrdinalIgnoreCase) ? "dav1" : "dvh1";
-        builder.Append(",SUPPLEMENTAL-CODECS=\"")
-            .Append(dvFourCc)
-            .Append('.')
-            .Append(dvProfile.Value.ToString("D2", CultureInfo.InvariantCulture))
-            .Append('.')
-            .Append(dvLevel.Value.ToString("D2", CultureInfo.InvariantCulture))
-            .Append('/')
-            .Append(dvRangeString)
-            .Append('"');
+        return;
+
+        void AppendDvString()
+        {
+            var dvProfile = state.VideoStream.DvProfile;
+            var dvLevel = state.VideoStream.DvLevel;
+            var dvRangeString = state.VideoStream.VideoRangeType switch
+            {
+                VideoRangeType.DOVIWithHDR10 => "db1p",
+                VideoRangeType.DOVIWithHLG => "db4h",
+                VideoRangeType.DOVIWithHDR10Plus => "db1p", // The HDR10+ metadata would be removed if Dovi metadata is not removed
+                _ => string.Empty // Don't label Dovi with EL and SDR due to compatability issues, ignore invalid configurations
+            };
+
+            if (dvProfile is null || dvLevel is null || string.IsNullOrEmpty(dvRangeString))
+            {
+                return;
+            }
+
+            var dvFourCc = string.Equals(state.ActualOutputVideoCodec, "av1", StringComparison.OrdinalIgnoreCase) ? "dav1" : "dvh1";
+            builder.Append(",SUPPLEMENTAL-CODECS=\"")
+                .Append(dvFourCc)
+                .Append('.')
+                .Append(dvProfile.Value.ToString("D2", CultureInfo.InvariantCulture))
+                .Append('.')
+                .Append(dvLevel.Value.ToString("D2", CultureInfo.InvariantCulture))
+                .Append('/')
+                .Append(dvRangeString)
+                .Append('"');
+        }
+
+        void AppendHdr10PlusString()
+        {
+            var videoCodecLevel = GetOutputVideoCodecLevel(state);
+            if (string.IsNullOrEmpty(state.ActualOutputVideoCodec) || videoCodecLevel is null)
+            {
+                return;
+            }
+
+            var videoCodecString = GetPlaylistVideoCodecs(state, state.ActualOutputVideoCodec, videoCodecLevel.Value);
+            builder.Append(",SUPPLEMENTAL-CODECS=\"")
+                .Append(videoCodecString)
+                .Append('/')
+                .Append("cdm4")
+                .Append('"');
+        }
     }
 
     /// <summary>
@@ -526,9 +669,7 @@ public class DynamicHlsHelper
             return false;
         }
 
-        // Having problems in android
-        return false;
-        // return state.VideoRequest.VideoBitRate.HasValue;
+        return state.VideoRequest?.VideoBitRate.HasValue ?? false;
     }
 
     private void AddSubtitles(StreamState state, IEnumerable<MediaStream> subtitles, StringBuilder builder, ClaimsPrincipal user)
@@ -550,7 +691,7 @@ public class DynamicHlsHelper
 
             var url = string.Format(
                 CultureInfo.InvariantCulture,
-                "{0}/Subtitles/{1}/subtitles.m3u8?SegmentLength={2}&api_key={3}",
+                "{0}/Subtitles/{1}/subtitles.m3u8?SegmentLength={2}&ApiKey={3}",
                 state.Request.MediaSourceId,
                 stream.Index.ToString(CultureInfo.InvariantCulture),
                 30.ToString(CultureInfo.InvariantCulture),
@@ -587,7 +728,7 @@ public class DynamicHlsHelper
 
             var url = string.Format(
                 CultureInfo.InvariantCulture,
-                "Trickplay/{0}/tiles.m3u8?MediaSourceId={1}&api_key={2}",
+                "Trickplay/{0}/tiles.m3u8?MediaSourceId={1}&ApiKey={2}",
                 width.ToString(CultureInfo.InvariantCulture),
                 state.Request.MediaSourceId,
                 user.GetToken());
@@ -616,7 +757,7 @@ public class DynamicHlsHelper
             && state.VideoStream is not null
             && state.VideoStream.Level.HasValue)
         {
-            levelString = state.VideoStream.Level.Value.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            levelString = state.VideoStream.Level.Value.ToString(CultureInfo.InvariantCulture);
         }
         else
         {
@@ -692,7 +833,9 @@ public class DynamicHlsHelper
     {
         if (string.Equals(state.ActualOutputAudioCodec, "aac", StringComparison.OrdinalIgnoreCase))
         {
-            string? profile = state.GetRequestedProfiles("aac").FirstOrDefault();
+            string? profile = EncodingHelper.IsCopyCodec(state.OutputAudioCodec)
+                ? state.AudioStream?.Profile : state.GetRequestedProfiles("aac").FirstOrDefault();
+
             return HlsCodecStringHelpers.GetAACString(profile);
         }
 
@@ -724,6 +867,19 @@ public class DynamicHlsHelper
         if (string.Equals(state.ActualOutputAudioCodec, "opus", StringComparison.OrdinalIgnoreCase))
         {
             return HlsCodecStringHelpers.GetOPUSString();
+        }
+
+        if (string.Equals(state.ActualOutputAudioCodec, "truehd", StringComparison.OrdinalIgnoreCase))
+        {
+            return HlsCodecStringHelpers.GetTRUEHDString();
+        }
+
+        if (string.Equals(state.ActualOutputAudioCodec, "dts", StringComparison.OrdinalIgnoreCase))
+        {
+            // lavc only support encoding DTS core profile
+            string? profile = EncodingHelper.IsCopyCodec(state.OutputAudioCodec) ? state.AudioStream?.Profile : "DTS";
+
+            return HlsCodecStringHelpers.GetDTSString(profile);
         }
 
         return string.Empty;
@@ -830,23 +986,6 @@ public class DynamicHlsHelper
         }
 
         return variation;
-    }
-
-    private string ReplaceVideoBitrate(string url, int oldValue, int newValue)
-    {
-        return url.Replace(
-            "videobitrate=" + oldValue.ToString(CultureInfo.InvariantCulture),
-            "videobitrate=" + newValue.ToString(CultureInfo.InvariantCulture),
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    private string ReplaceProfile(string url, string codec, string oldValue, string newValue)
-    {
-        string profileStr = codec + "-profile=";
-        return url.Replace(
-            profileStr + oldValue,
-            profileStr + newValue,
-            StringComparison.OrdinalIgnoreCase);
     }
 
     private string ReplacePlaylistCodecsField(StringBuilder playlist, StringBuilder oldValue, StringBuilder newValue)

@@ -7,12 +7,14 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json.Serialization;
+using System.Threading;
 using Jellyfin.Data.Enums;
 using Jellyfin.Extensions;
+using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Dlna;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
-using MediaBrowser.Model.Providers;
 using Microsoft.Extensions.Logging;
 
 namespace MediaBrowser.Controller.Entities.TV
@@ -22,11 +24,11 @@ namespace MediaBrowser.Controller.Entities.TV
     /// </summary>
     public class Episode : Video, IHasTrailers, IHasLookupInfo<EpisodeInfo>, IHasSeries
     {
+        public static IMediaEncoder MediaEncoder { get; set; }
+
         /// <inheritdoc />
         [JsonIgnore]
-        public IReadOnlyList<BaseItem> LocalTrailers => GetExtras()
-            .Where(extra => extra.ExtraType == Model.Entities.ExtraType.Trailer)
-            .ToArray();
+        public IReadOnlyList<BaseItem> LocalTrailers => GetExtras([Model.Entities.ExtraType.Trailer]).ToArray();
 
         /// <summary>
         /// Gets or sets the season in which it aired.
@@ -45,7 +47,7 @@ namespace MediaBrowser.Controller.Entities.TV
         public int? IndexNumberEnd { get; set; }
 
         [JsonIgnore]
-        protected override bool SupportsOwnedItems => IsStacked || MediaSourceCount > 1;
+        protected override bool SupportsOwnedItems => IsStacked || LocalAlternateVersions.Length > 0 || MediaSourceCount > 1;
 
         [JsonIgnore]
         public override bool SupportsInheritedParentImages => true;
@@ -149,6 +151,12 @@ namespace MediaBrowser.Controller.Entities.TV
             }
 
             return 16.0 / 9;
+        }
+
+        /// <inheritdoc />
+        public override string GetInheritedOriginalLanguage()
+        {
+            return OriginalLanguage ?? Series?.GetInheritedOriginalLanguage();
         }
 
         public override List<string> GetUserDataKeys()
@@ -325,6 +333,39 @@ namespace MediaBrowser.Controller.Entities.TV
             {
                 if (SourceType == SourceType.Library || SourceType == SourceType.LiveTV)
                 {
+                    var libraryOptions = LibraryManager.GetLibraryOptions(this);
+                    if (libraryOptions.EnableEmbeddedEpisodeInfos && string.Equals(Container, "mp4", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            var mediaInfo = MediaEncoder.GetMediaInfo(
+                                new MediaInfoRequest
+                                {
+                                    MediaSource = GetMediaSources(false)[0],
+                                    MediaType = DlnaProfileType.Video
+                                },
+                                CancellationToken.None).GetAwaiter().GetResult();
+                            if (mediaInfo.ParentIndexNumber > 0)
+                            {
+                                ParentIndexNumber = mediaInfo.ParentIndexNumber;
+                            }
+
+                            if (mediaInfo.IndexNumber > 0)
+                            {
+                                IndexNumber = mediaInfo.IndexNumber;
+                            }
+
+                            if (!string.IsNullOrEmpty(mediaInfo.ShowName))
+                            {
+                                SeriesName = mediaInfo.ShowName;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogError(ex, "Error reading the episode information with ffprobe. Episode: {EpisodeInfo}", Path);
+                        }
+                    }
+
                     try
                     {
                         if (LibraryManager.FillMissingEpisodeNumbersFromPath(this, replaceAllMetadata))

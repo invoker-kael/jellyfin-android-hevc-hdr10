@@ -4,10 +4,10 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Api.Extensions;
-using Jellyfin.Data.Enums;
-using MediaBrowser.Controller;
+using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.MediaSegments;
 using MediaBrowser.Model.MediaSegments;
 using MediaBrowser.Model.Querying;
 using Microsoft.AspNetCore.Authorization;
@@ -20,6 +20,7 @@ namespace Jellyfin.Api.Controllers;
 /// Media Segments api.
 /// </summary>
 [Authorize]
+[Tags("MediaSegment")]
 public class MediaSegmentsController : BaseJellyfinApiController
 {
     private readonly IMediaSegmentManager _mediaSegmentManager;
@@ -55,7 +56,8 @@ public class MediaSegmentsController : BaseJellyfinApiController
             return NotFound();
         }
 
-        var items = await _mediaSegmentManager.GetSegmentsAsync(item, includeSegmentTypes).ConfigureAwait(false);
+        var libraryOptions = _libraryManager.GetLibraryOptions(item);
+        var items = await _mediaSegmentManager.GetSegmentsAsync(item, includeSegmentTypes, libraryOptions).ConfigureAwait(false);
         return Ok(new QueryResult<MediaSegmentDto>(items.ToArray()));
     }
 }

@@ -6,8 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Data.Entities;
 using Jellyfin.Data.Events;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Dto;
@@ -199,6 +199,13 @@ namespace MediaBrowser.Controller.LiveTv
         /// </summary>
         /// <returns>IEnumerable{User}.</returns>
         IEnumerable<User> GetEnabledUsers();
+
+        /// <summary>
+        /// Gets whether Live TV is enabled for a single user.
+        /// </summary>
+        /// <param name="user">The user.</param>
+        /// <returns>Whether Live TV is enabled for the user.</returns>
+        bool IsEnabledForUser(User user);
 
         /// <summary>
         /// Gets the internal channels.

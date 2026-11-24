@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,7 +67,7 @@ public class ListingsManager : IListingsManager
         if (index == -1 || string.IsNullOrWhiteSpace(info.Id))
         {
             info.Id = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-            config.ListingProviders = [..list, info];
+            config.ListingProviders = [.. list, info];
         }
         else
         {
@@ -74,6 +75,9 @@ public class ListingsManager : IListingsManager
         }
 
         _config.SaveConfiguration("livetv", config);
+
+        InvalidateListingsProviderCache(info.Id);
+
         _taskManager.CancelIfRunningAndQueue<RefreshGuideScheduledTask>();
 
         return info;
@@ -87,6 +91,12 @@ public class ListingsManager : IListingsManager
         config.ListingProviders = config.ListingProviders.Where(i => !string.Equals(id, i.Id, StringComparison.OrdinalIgnoreCase)).ToArray();
 
         _config.SaveConfiguration("livetv", config);
+
+        if (!string.IsNullOrEmpty(id))
+        {
+            InvalidateListingsProviderCache(id);
+        }
+
         _taskManager.CancelIfRunningAndQueue<RefreshGuideScheduledTask>();
     }
 
@@ -114,6 +124,8 @@ public class ListingsManager : IListingsManager
     {
         ArgumentNullException.ThrowIfNull(channel);
 
+        Exception? failure = null;
+
         foreach (var (provider, providerInfo) in GetListingProviders())
         {
             if (!IsListingProviderEnabledForTuner(providerInfo, channel.TunerHostId))
@@ -134,18 +146,41 @@ public class ListingsManager : IListingsManager
                 provider.Name,
                 providerInfo.ListingsId ?? string.Empty);
 
-            var epgChannels = await GetEpgChannels(provider, providerInfo, true, cancellationToken).ConfigureAwait(false);
-
-            var epgChannel = GetEpgChannelFromTunerChannel(providerInfo.ChannelMappings, channel, epgChannels);
-            if (epgChannel is null)
+            List<ProgramInfo> programs;
+            try
             {
-                _logger.LogDebug("EPG channel not found for tuner channel {0}-{1} from {2}-{3}", channel.Number, channel.Name, provider.Name, providerInfo.ListingsId ?? string.Empty);
+                // Listing the provider's channels can fail as well, and that must not stop the
+                // fallback to the next provider either.
+                var epgChannels = await GetEpgChannels(provider, providerInfo, true, cancellationToken).ConfigureAwait(false);
+
+                var epgChannel = GetEpgChannelFromTunerChannel(providerInfo.ChannelMappings, channel, epgChannels);
+                if (epgChannel is null)
+                {
+                    _logger.LogDebug("EPG channel not found for tuner channel {0}-{1} from {2}-{3}", channel.Number, channel.Name, provider.Name, providerInfo.ListingsId ?? string.Empty);
+                    continue;
+                }
+
+                programs = (await provider
+                    .GetProgramsAsync(providerInfo, epgChannel.Id, startDateUtc, endDateUtc, cancellationToken).ConfigureAwait(false))
+                    .ToList();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Another provider may still be able to serve this channel, so the failure is
+                // held back rather than thrown, and only surfaces if nothing else answers.
+                _logger.LogError(
+                    ex,
+                    "Error getting programs for channel {Number}-{Name} from {Provider}",
+                    channel.Number,
+                    channel.Name,
+                    provider.Name);
+                failure ??= ex;
                 continue;
             }
-
-            var programs = (await provider
-                .GetProgramsAsync(providerInfo, epgChannel.Id, startDateUtc, endDateUtc, cancellationToken).ConfigureAwait(false))
-                .ToList();
 
             // Replace the value that came from the provider with a normalized value
             foreach (var program in programs)
@@ -160,7 +195,16 @@ public class ListingsManager : IListingsManager
             }
         }
 
-        return Enumerable.Empty<ProgramInfo>();
+        // Reporting no programs would have the guide refresh delete the ones this channel already
+        // has, so a channel nothing could be fetched for has to fail instead.
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                $"No listings provider could supply programs for channel {channel.Number}-{channel.Name}",
+                failure);
+        }
+
+        return [];
     }
 
     /// <inheritdoc />
@@ -230,17 +274,22 @@ public class ListingsManager : IListingsManager
         var listingsProviderInfo = config.ListingProviders
             .First(info => string.Equals(providerId, info.Id, StringComparison.OrdinalIgnoreCase));
 
+        var channelMappingExists = listingsProviderInfo.ChannelMappings
+            .Any(pair => string.Equals(pair.Name, tunerChannelNumber, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(pair.Value, providerChannelNumber, StringComparison.OrdinalIgnoreCase));
+
         listingsProviderInfo.ChannelMappings = listingsProviderInfo.ChannelMappings
             .Where(pair => !string.Equals(pair.Name, tunerChannelNumber, StringComparison.OrdinalIgnoreCase)).ToArray();
 
-        if (!string.Equals(tunerChannelNumber, providerChannelNumber, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(tunerChannelNumber, providerChannelNumber, StringComparison.OrdinalIgnoreCase)
+            && !channelMappingExists)
         {
             var newItem = new NameValuePair
             {
                 Name = tunerChannelNumber,
                 Value = providerChannelNumber
             };
-            listingsProviderInfo.ChannelMappings = [..listingsProviderInfo.ChannelMappings, newItem];
+            listingsProviderInfo.ChannelMappings = [.. listingsProviderInfo.ChannelMappings, newItem];
         }
 
         _config.SaveConfiguration("livetv", config);
@@ -315,6 +364,38 @@ public class ListingsManager : IListingsManager
         }
 
         return channelId;
+    }
+
+    private void InvalidateListingsProviderCache(string providerId)
+    {
+        // Clear in-memory EPG channel cache for this provider
+        _epgChannels.TryRemove(providerId, out _);
+
+        // Provider IDs are generated as Guid.NewGuid().ToString("N")
+        // reject anything else so we never use untrusted input in a path or log entry.
+        if (!Guid.TryParseExact(providerId, "N", out var providerGuid))
+        {
+            return;
+        }
+
+        // Delete the cached XMLTV file so a fresh copy is downloaded
+        var cachePath = _config.CommonApplicationPaths?.CachePath;
+        if (!string.IsNullOrEmpty(cachePath))
+        {
+            var safeId = providerGuid.ToString("N", CultureInfo.InvariantCulture);
+            var xmltvCacheFile = Path.Combine(cachePath, "xmltv", safeId + ".xml");
+            try
+            {
+                if (File.Exists(xmltvCacheFile))
+                {
+                    File.Delete(xmltvCacheFile);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Error deleting XMLTV cache file for provider {ProviderId}", safeId);
+            }
+        }
     }
 
     private async Task<EpgChannelData> GetEpgChannels(

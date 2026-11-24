@@ -7,9 +7,11 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json.Serialization;
-using Jellyfin.Data.Entities;
+using System.Threading;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
+using MediaBrowser.Common;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Querying;
@@ -19,6 +21,7 @@ namespace MediaBrowser.Controller.Entities.TV
     /// <summary>
     /// Class Season.
     /// </summary>
+    [RequiresSourceSerialisation]
     public class Season : Folder, IHasSeries, IHasLookupInfo<SeasonInfo>
     {
         [JsonIgnore]
@@ -120,9 +123,15 @@ namespace MediaBrowser.Controller.Entities.TV
 
         public override int GetChildCount(User user)
         {
-            var result = GetChildren(user, true).Count;
+            var result = GetChildren(user, true, null).Count;
 
             return result;
+        }
+
+        /// <inheritdoc />
+        public override string GetInheritedOriginalLanguage()
+        {
+            return OriginalLanguage ?? Series?.GetInheritedOriginalLanguage();
         }
 
         public override string CreatePresentationUniqueKey()
@@ -132,7 +141,7 @@ namespace MediaBrowser.Controller.Entities.TV
                 var series = Series;
                 if (series is not null)
                 {
-                    return series.PresentationUniqueKey + "-" + (IndexNumber ?? 0).ToString("000", CultureInfo.InvariantCulture);
+                    return series.PresentationUniqueKey + "-" + IndexNumber.Value.ToString("000", CultureInfo.InvariantCulture);
                 }
             }
 
@@ -150,6 +159,21 @@ namespace MediaBrowser.Controller.Entities.TV
 
         protected override QueryResult<BaseItem> GetItemsInternal(InternalItemsQuery query)
         {
+            if (SourceType == SourceType.Channel)
+            {
+                try
+                {
+                    query.Parent = this;
+                    query.ChannelIds = new[] { ChannelId };
+                    return ChannelManager.GetChannelItemsInternal(query, new Progress<double>(), CancellationToken.None).GetAwaiter().GetResult();
+                }
+                catch
+                {
+                    // Already logged at lower levels
+                    return new QueryResult<BaseItem>();
+                }
+            }
+
             if (query.User is null)
             {
                 return base.GetItemsInternal(query);
@@ -157,11 +181,9 @@ namespace MediaBrowser.Controller.Entities.TV
 
             var user = query.User;
 
-            Func<BaseItem, bool> filter = i => UserViewBuilder.Filter(i, user, query, UserDataManager, LibraryManager);
+            var items = UserViewBuilder.Filter(GetEpisodes(user, query.DtoOptions, true), user, query, UserDataManager, LibraryManager);
 
-            var items = GetEpisodes(user, query.DtoOptions, true).Where(filter);
-
-            return PostFilterAndSort(items, query, false);
+            return PostFilterAndSort(items, query);
         }
 
         /// <summary>
@@ -183,12 +205,17 @@ namespace MediaBrowser.Controller.Entities.TV
 
         public List<BaseItem> GetEpisodes(Series series, User user, IEnumerable<Episode> allSeriesEpisodes, DtoOptions options, bool shouldIncludeMissingEpisodes)
         {
+            if (series is null)
+            {
+                return [];
+            }
+
             return series.GetSeasonEpisodes(this, user, allSeriesEpisodes, options, shouldIncludeMissingEpisodes);
         }
 
         public List<BaseItem> GetEpisodes()
         {
-            return Series.GetSeasonEpisodes(this, null, null, new DtoOptions(true), true);
+            return GetEpisodes(Series, null, null, new DtoOptions(true), true);
         }
 
         public override List<BaseItem> GetChildren(User user, bool includeLinkedChildren, InternalItemsQuery query)
@@ -255,7 +282,7 @@ namespace MediaBrowser.Controller.Entities.TV
 
             if (!IndexNumber.HasValue && !string.IsNullOrEmpty(Path))
             {
-                IndexNumber ??= LibraryManager.GetSeasonNumberFromPath(Path);
+                IndexNumber ??= LibraryManager.GetSeasonNumberFromPath(Path, ParentId);
 
                 // If a change was made record it
                 if (IndexNumber.HasValue)

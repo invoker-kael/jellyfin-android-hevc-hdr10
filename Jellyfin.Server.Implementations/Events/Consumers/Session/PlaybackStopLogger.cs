@@ -1,8 +1,8 @@
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
-using Jellyfin.Data.Entities;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Events;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Activity;
@@ -69,15 +69,15 @@ namespace Jellyfin.Server.Implementations.Events.Consumers.Session
             await _activityManager.CreateAsync(new ActivityLog(
                     string.Format(
                         CultureInfo.InvariantCulture,
-                        _localizationManager.GetLocalizedString("UserStoppedPlayingItemWithValues"),
+                        _localizationManager.GetServerLocalizedString("UserStoppedPlayingItemWithValues"),
                         user.Username,
                         GetItemName(item),
                         eventArgs.DeviceName),
                     notificationType,
                     user.Id)
-                {
-                    ItemId = eventArgs.Item?.Id.ToString("N", CultureInfo.InvariantCulture),
-                })
+            {
+                ItemId = eventArgs.Item?.Id.ToString("N", CultureInfo.InvariantCulture),
+            })
                 .ConfigureAwait(false);
         }
 

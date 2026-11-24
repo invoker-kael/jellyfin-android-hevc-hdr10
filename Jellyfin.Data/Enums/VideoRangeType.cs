@@ -46,6 +46,28 @@ public enum VideoRangeType
     DOVIWithSDR,
 
     /// <summary>
+    /// Dolby Vision with Enhancment Layer (Profile 7).
+    /// </summary>
+    DOVIWithEL,
+
+    /// <summary>
+    /// Dolby Vision and HDR10+ Metadata coexists.
+    /// </summary>
+    DOVIWithHDR10Plus,
+
+    /// <summary>
+    /// Dolby Vision with Enhancment Layer (Profile 7) and HDR10+ Metadata coexists.
+    /// </summary>
+    DOVIWithELHDR10Plus,
+
+    /// <summary>
+    /// Dolby Vision with invalid configuration, e.g. Profile 8 compat id 6 or inconsistent base-layer color metadata.
+    /// The base layer is classified as HDR only when its transfer characteristics signal PQ or HLG.
+    /// Otherwise, it is classified as SDR.
+    /// </summary>
+    DOVIInvalid,
+
+    /// <summary>
     /// HDR10+ video range type (10bit to 16bit).
     /// </summary>
     HDR10Plus

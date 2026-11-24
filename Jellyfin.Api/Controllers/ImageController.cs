@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics.CodeAnalysis;
+using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -20,6 +21,7 @@ using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Branding;
 using MediaBrowser.Model.Drawing;
@@ -49,6 +51,7 @@ public class ImageController : BaseJellyfinApiController
     private readonly ILogger<ImageController> _logger;
     private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly IApplicationPaths _appPaths;
+    private readonly ISchedulesDirectService _schedulesDirectService;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ImageController"/> class.
@@ -61,6 +64,7 @@ public class ImageController : BaseJellyfinApiController
     /// <param name="logger">Instance of the <see cref="ILogger{ImageController}"/> interface.</param>
     /// <param name="serverConfigurationManager">Instance of the <see cref="IServerConfigurationManager"/> interface.</param>
     /// <param name="appPaths">Instance of the <see cref="IApplicationPaths"/> interface.</param>
+    /// <param name="schedulesDirectService">Instance of the <see cref="ISchedulesDirectService"/> interface.</param>
     public ImageController(
         IUserManager userManager,
         ILibraryManager libraryManager,
@@ -69,7 +73,8 @@ public class ImageController : BaseJellyfinApiController
         IFileSystem fileSystem,
         ILogger<ImageController> logger,
         IServerConfigurationManager serverConfigurationManager,
-        IApplicationPaths appPaths)
+        IApplicationPaths appPaths,
+        ISchedulesDirectService schedulesDirectService)
     {
         _userManager = userManager;
         _libraryManager = libraryManager;
@@ -79,6 +84,7 @@ public class ImageController : BaseJellyfinApiController
         _logger = logger;
         _serverConfigurationManager = serverConfigurationManager;
         _appPaths = appPaths;
+        _schedulesDirectService = schedulesDirectService;
     }
 
     private static CryptoStream GetFromBase64Stream(Stream inputStream)
@@ -124,13 +130,19 @@ public class ImageController : BaseJellyfinApiController
         {
             // Handle image/png; charset=utf-8
             var mimeType = Request.ContentType?.Split(';').FirstOrDefault();
-            var userDataPath = Path.Combine(_serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath, user.Username);
+            var userConfigurationDirectoryPath = _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath;
+            var userDataPath = Path.Combine(userConfigurationDirectoryPath, user.Username);
+            if (!PathHelper.IsContainedIn(userConfigurationDirectoryPath, userDataPath))
+            {
+                return BadRequest("Invalid user.");
+            }
+
             if (user.ProfileImage is not null)
             {
                 await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
             }
 
-            user.ProfileImage = new Data.Entities.ImageInfo(Path.Combine(userDataPath, "profile" + extension));
+            user.ProfileImage = new Database.Implementations.Entities.ImageInfo(Path.Combine(userDataPath, "profile" + extension));
 
             await _providerManager
                 .SaveImage(stream, mimeType, user.ProfileImage.Path)
@@ -1458,19 +1470,6 @@ public class ImageController : BaseJellyfinApiController
     /// <param name="userId">User id.</param>
     /// <param name="tag">Optional. Supply the cache tag from the item object to receive strong caching headers.</param>
     /// <param name="format">Determines the output format of the image - original,gif,jpg,png.</param>
-    /// <param name="maxWidth">The maximum image width to return.</param>
-    /// <param name="maxHeight">The maximum image height to return.</param>
-    /// <param name="percentPlayed">Optional. Percent to render for the percent played overlay.</param>
-    /// <param name="unplayedCount">Optional. Unplayed count overlay to render.</param>
-    /// <param name="width">The fixed image width to return.</param>
-    /// <param name="height">The fixed image height to return.</param>
-    /// <param name="quality">Optional. Quality setting, from 0-100. Defaults to 90 and should suffice in most cases.</param>
-    /// <param name="fillWidth">Width of box to fill.</param>
-    /// <param name="fillHeight">Height of box to fill.</param>
-    /// <param name="blur">Optional. Blur image.</param>
-    /// <param name="backgroundColor">Optional. Apply a background color for transparent images.</param>
-    /// <param name="foregroundLayer">Optional. Apply a foreground layer on top of the image.</param>
-    /// <param name="imageIndex">Image index.</param>
     /// <response code="200">Image stream returned.</response>
     /// <response code="400">User id not provided.</response>
     /// <response code="404">Item not found.</response>
@@ -1487,20 +1486,7 @@ public class ImageController : BaseJellyfinApiController
     public async Task<ActionResult> GetUserImage(
         [FromQuery] Guid? userId,
         [FromQuery] string? tag,
-        [FromQuery] ImageFormat? format,
-        [FromQuery] int? maxWidth,
-        [FromQuery] int? maxHeight,
-        [FromQuery] double? percentPlayed,
-        [FromQuery] int? unplayedCount,
-        [FromQuery] int? width,
-        [FromQuery] int? height,
-        [FromQuery] int? quality,
-        [FromQuery] int? fillWidth,
-        [FromQuery] int? fillHeight,
-        [FromQuery] int? blur,
-        [FromQuery] string? backgroundColor,
-        [FromQuery] string? foregroundLayer,
-        [FromQuery] int? imageIndex)
+        [FromQuery] ImageFormat? format)
     {
         var requestUserId = userId ?? User.GetUserId();
         if (requestUserId.IsEmpty())
@@ -1521,34 +1507,24 @@ public class ImageController : BaseJellyfinApiController
             DateModified = user.ProfileImage.LastModified
         };
 
-        if (width.HasValue)
-        {
-            info.Width = width.Value;
-        }
-
-        if (height.HasValue)
-        {
-            info.Height = height.Value;
-        }
-
         return await GetImageInternal(
                 user.Id,
                 ImageType.Profile,
-                imageIndex,
+                null,
                 tag,
                 format,
-                maxWidth,
-                maxHeight,
-                percentPlayed,
-                unplayedCount,
-                width,
-                height,
-                quality,
-                fillWidth,
-                fillHeight,
-                blur,
-                backgroundColor,
-                foregroundLayer,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                90,
+                null,
+                null,
+                null,
+                null,
+                null,
                 null,
                 info)
             .ConfigureAwait(false);
@@ -1608,20 +1584,7 @@ public class ImageController : BaseJellyfinApiController
         => GetUserImage(
             userId,
             tag,
-            format,
-            maxWidth,
-            maxHeight,
-            percentPlayed,
-            unplayedCount,
-            width,
-            height,
-            quality,
-            fillWidth,
-            fillHeight,
-            blur,
-            backgroundColor,
-            foregroundLayer,
-            imageIndex);
+            format);
 
     /// <summary>
     /// Get user profile image.
@@ -1677,36 +1640,13 @@ public class ImageController : BaseJellyfinApiController
         => GetUserImage(
             userId,
             tag,
-            format,
-            maxWidth,
-            maxHeight,
-            percentPlayed,
-            unplayedCount,
-            width,
-            height,
-            quality,
-            fillWidth,
-            fillHeight,
-            blur,
-            backgroundColor,
-            foregroundLayer,
-            imageIndex);
+            format);
 
     /// <summary>
     /// Generates or gets the splashscreen.
     /// </summary>
     /// <param name="tag">Supply the cache tag from the item object to receive strong caching headers.</param>
     /// <param name="format">Determines the output format of the image - original,gif,jpg,png.</param>
-    /// <param name="maxWidth">The maximum image width to return.</param>
-    /// <param name="maxHeight">The maximum image height to return.</param>
-    /// <param name="width">The fixed image width to return.</param>
-    /// <param name="height">The fixed image height to return.</param>
-    /// <param name="fillWidth">Width of box to fill.</param>
-    /// <param name="fillHeight">Height of box to fill.</param>
-    /// <param name="blur">Blur image.</param>
-    /// <param name="backgroundColor">Apply a background color for transparent images.</param>
-    /// <param name="foregroundLayer">Apply a foreground layer on top of the image.</param>
-    /// <param name="quality">Quality setting, from 0-100.</param>
     /// <response code="200">Splashscreen returned successfully.</response>
     /// <returns>The splashscreen.</returns>
     [HttpGet("Branding/Splashscreen")]
@@ -1714,20 +1654,11 @@ public class ImageController : BaseJellyfinApiController
     [ProducesImageFile]
     public async Task<ActionResult> GetSplashscreen(
         [FromQuery] string? tag,
-        [FromQuery] ImageFormat? format,
-        [FromQuery] int? maxWidth,
-        [FromQuery] int? maxHeight,
-        [FromQuery] int? width,
-        [FromQuery] int? height,
-        [FromQuery] int? fillWidth,
-        [FromQuery] int? fillHeight,
-        [FromQuery] int? blur,
-        [FromQuery] string? backgroundColor,
-        [FromQuery] string? foregroundLayer,
-        [FromQuery, Range(0, 100)] int quality = 90)
+        [FromQuery] ImageFormat? format)
     {
         var brandingOptions = _serverConfigurationManager.GetConfiguration<BrandingOptions>("branding");
-        if (!brandingOptions.SplashscreenEnabled)
+        var isAdmin = User.IsInRole(Constants.UserRoles.Administrator);
+        if (!brandingOptions.SplashscreenEnabled && !isAdmin)
         {
             return NotFound();
         }
@@ -1762,23 +1693,24 @@ public class ImageController : BaseJellyfinApiController
             {
                 Path = splashscreenPath
             },
-            Height = height,
-            MaxHeight = maxHeight,
-            MaxWidth = maxWidth,
-            FillHeight = fillHeight,
-            FillWidth = fillWidth,
-            Quality = quality,
-            Width = width,
-            Blur = blur,
-            BackgroundColor = backgroundColor,
-            ForegroundLayer = foregroundLayer,
+            Height = null,
+            MaxHeight = null,
+            MaxWidth = null,
+            FillHeight = null,
+            FillWidth = null,
+            Quality = 90,
+            Width = null,
+            Blur = null,
+            BackgroundColor = null,
+            ForegroundLayer = null,
             SupportedOutputFormats = outputFormats
         };
 
         return await GetImageResult(
                 options,
                 cacheDuration,
-                ImmutableDictionary<string, string>.Empty)
+                ImmutableDictionary<string, string>.Empty,
+                tag)
             .ConfigureAwait(false);
     }
 
@@ -1966,7 +1898,13 @@ public class ImageController : BaseJellyfinApiController
 
         if (!imageInfo.IsLocalFile && item is not null)
         {
-            imageInfo = await _libraryManager.ConvertImageToLocal(item, imageInfo, imageIndex ?? 0).ConfigureAwait(false);
+            var localImage = await _schedulesDirectService.ConvertImageToLocal(item, imageInfo, imageIndex ?? 0).ConfigureAwait(false);
+            if (localImage is null)
+            {
+                return NotFound();
+            }
+
+            imageInfo = localImage;
         }
 
         var options = new ImageProcessingOptions
@@ -1993,7 +1931,8 @@ public class ImageController : BaseJellyfinApiController
         return await GetImageResult(
             options,
             cacheDuration,
-            responseHeaders).ConfigureAwait(false);
+            responseHeaders,
+            tag).ConfigureAwait(false);
     }
 
     private ImageFormat[] GetOutputFormats(ImageFormat? format)
@@ -2072,18 +2011,13 @@ public class ImageController : BaseJellyfinApiController
     private async Task<ActionResult> GetImageResult(
         ImageProcessingOptions imageProcessingOptions,
         TimeSpan? cacheDuration,
-        IDictionary<string, string> headers)
+        IDictionary<string, string> headers,
+        string? tag)
     {
         var (imagePath, imageContentType, dateImageModified) = await _imageProcessor.ProcessImage(imageProcessingOptions).ConfigureAwait(false);
 
         var disableCaching = Request.Headers[HeaderNames.CacheControl].Contains("no-cache");
-        var parsingSuccessful = DateTime.TryParse(Request.Headers[HeaderNames.IfModifiedSince], out var ifModifiedSinceHeader);
-
-        // if the parsing of the IfModifiedSince header was not successful, disable caching
-        if (!parsingSuccessful)
-        {
-            // disableCaching = true;
-        }
+        var hasTag = !string.IsNullOrEmpty(tag);
 
         foreach (var (key, value) in headers)
         {
@@ -2105,7 +2039,8 @@ public class ImageController : BaseJellyfinApiController
         {
             if (cacheDuration.HasValue)
             {
-                Response.Headers.Append(HeaderNames.CacheControl, "public, max-age=" + cacheDuration.Value.TotalSeconds);
+                // When tag is provided, the URL is effectively immutable - the tag changes when the image changes
+                Response.Headers.Append(HeaderNames.CacheControl, "public, max-age=" + cacheDuration.Value.TotalSeconds + ", immutable");
             }
             else
             {
@@ -2114,10 +2049,27 @@ public class ImageController : BaseJellyfinApiController
 
             Response.Headers.Append(HeaderNames.LastModified, dateImageModified.ToUniversalTime().ToString("ddd, dd MMM yyyy HH:mm:ss \"GMT\"", CultureInfo.InvariantCulture));
 
-            // if the image was not modified since "ifModifiedSinceHeader"-header, return a HTTP status code 304 not modified
-            if (!(dateImageModified > ifModifiedSinceHeader) && cacheDuration.HasValue)
+            // Add ETag header for stronger cache validation when tag is provided
+            if (hasTag)
             {
-                if (ifModifiedSinceHeader.Add(cacheDuration.Value) < DateTime.UtcNow)
+                Response.Headers.Append(HeaderNames.ETag, $"\"{tag}\"");
+
+                // Check If-None-Match header for ETag-based validation (preferred over If-Modified-Since)
+                var ifNoneMatch = Request.Headers[HeaderNames.IfNoneMatch].ToString();
+                if (!string.IsNullOrEmpty(ifNoneMatch)
+                    && (string.Equals(ifNoneMatch, $"\"{tag}\"", StringComparison.Ordinal)
+                        || string.Equals(ifNoneMatch, tag, StringComparison.Ordinal)))
+                {
+                    Response.StatusCode = StatusCodes.Status304NotModified;
+                    return new ContentResult();
+                }
+            }
+
+            // Check If-Modified-Since header for time-based validation
+            if (DateTime.TryParse(Request.Headers[HeaderNames.IfModifiedSince], CultureInfo.InvariantCulture, out var ifModifiedSinceHeader))
+            {
+                // Return 304 if the image has not been modified since the client's cached version
+                if (dateImageModified <= ifModifiedSinceHeader)
                 {
                     Response.StatusCode = StatusCodes.Status304NotModified;
                     return new ContentResult();

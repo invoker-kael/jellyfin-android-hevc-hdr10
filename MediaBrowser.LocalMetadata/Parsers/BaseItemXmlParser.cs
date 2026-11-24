@@ -143,16 +143,16 @@ namespace MediaBrowser.LocalMetadata.Parsers
                     item.Name = reader.ReadNormalizedString();
                     break;
                 case "CriticRating":
-                {
-                    var text = reader.ReadElementContentAsString();
-
-                    if (float.TryParse(text, CultureInfo.InvariantCulture, out var value))
                     {
-                        item.CriticRating = value;
-                    }
+                        var text = reader.ReadElementContentAsString();
 
-                    break;
-                }
+                        if (float.TryParse(text, CultureInfo.InvariantCulture, out var value))
+                        {
+                            item.CriticRating = value;
+                        }
+
+                        break;
+                    }
 
                 case "SortTitle":
                     item.ForcedSortName = reader.ReadNormalizedString();
@@ -176,55 +176,55 @@ namespace MediaBrowser.LocalMetadata.Parsers
 
                     break;
                 case "LockedFields":
-                {
-                    var val = reader.ReadElementContentAsString();
-
-                    if (!string.IsNullOrWhiteSpace(val))
                     {
-                        item.LockedFields = val.Split('|').Select(i =>
+                        var val = reader.ReadElementContentAsString();
+
+                        if (!string.IsNullOrWhiteSpace(val))
                         {
-                            if (Enum.TryParse(i, true, out MetadataField field))
+                            item.LockedFields = val.Split('|').Select(i =>
                             {
-                                return (MetadataField?)field;
-                            }
+                                if (Enum.TryParse(i, true, out MetadataField field))
+                                {
+                                    return (MetadataField?)field;
+                                }
 
-                            return null;
-                        }).Where(i => i.HasValue).Select(i => i!.Value).ToArray();
+                                return null;
+                            }).Where(i => i.HasValue).Select(i => i!.Value).ToArray();
+                        }
+
+                        break;
                     }
-
-                    break;
-                }
 
                 case "TagLines":
-                {
-                    if (!reader.IsEmptyElement)
                     {
-                        using (var subtree = reader.ReadSubtree())
+                        if (!reader.IsEmptyElement)
                         {
-                            FetchFromTaglinesNode(subtree, item);
+                            using (var subtree = reader.ReadSubtree())
+                            {
+                                FetchFromTaglinesNode(subtree, item);
+                            }
                         }
-                    }
-                    else
-                    {
-                        reader.Read();
-                    }
+                        else
+                        {
+                            reader.Read();
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "Countries":
-                {
-                    if (!reader.IsEmptyElement)
                     {
-                        reader.Skip();
-                    }
-                    else
-                    {
-                        reader.Read();
-                    }
+                        if (!reader.IsEmptyElement)
+                        {
+                            reader.Skip();
+                        }
+                        else
+                        {
+                            reader.Read();
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "ContentRating":
                 case "MPAARating":
@@ -234,8 +234,8 @@ namespace MediaBrowser.LocalMetadata.Parsers
                     item.CustomRating = reader.ReadNormalizedString();
                     break;
                 case "RunningTime":
-                    var runtimeText = reader.ReadElementContentAsString();
-                    if (!string.IsNullOrWhiteSpace(runtimeText))
+                    var runtimeText = reader.ReadNormalizedString();
+                    if (!string.IsNullOrEmpty(runtimeText))
                     {
                         if (int.TryParse(runtimeText.AsSpan().LeftPart(' '), NumberStyles.Integer, CultureInfo.InvariantCulture, out var runtime))
                         {
@@ -253,7 +253,7 @@ namespace MediaBrowser.LocalMetadata.Parsers
 
                     break;
                 case "LockData":
-                    item.IsLocked = string.Equals(reader.ReadElementContentAsString(), "true", StringComparison.OrdinalIgnoreCase);
+                    item.IsLocked = string.Equals(reader.ReadNormalizedString(), "true", StringComparison.OrdinalIgnoreCase);
                     break;
                 case "Network":
                     foreach (var name in reader.GetStringArray())
@@ -307,19 +307,19 @@ namespace MediaBrowser.LocalMetadata.Parsers
 
                     break;
                 case "Trailers":
-                {
-                    if (!reader.IsEmptyElement)
                     {
-                        using var subtree = reader.ReadSubtree();
-                        FetchDataFromTrailersNode(subtree, item);
-                    }
-                    else
-                    {
-                        reader.Read();
-                    }
+                        if (!reader.IsEmptyElement)
+                        {
+                            using var subtree = reader.ReadSubtree();
+                            FetchDataFromTrailersNode(subtree, item);
+                        }
+                        else
+                        {
+                            reader.Read();
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "ProductionYear":
                     if (reader.TryReadInt(out var productionYear) && productionYear > 1850)
@@ -330,20 +330,20 @@ namespace MediaBrowser.LocalMetadata.Parsers
                     break;
                 case "Rating":
                 case "IMDBrating":
-                {
-                    var rating = reader.ReadElementContentAsString();
-
-                    if (!string.IsNullOrWhiteSpace(rating))
                     {
-                        // All external meta is saving this as '.' for decimal I believe...but just to be sure
-                        if (float.TryParse(rating.Replace(',', '.'), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var val))
-                        {
-                            item.CommunityRating = val;
-                        }
-                    }
+                        var rating = reader.ReadNormalizedString();
 
-                    break;
-                }
+                        if (!string.IsNullOrEmpty(rating))
+                        {
+                            // All external meta is saving this as '.' for decimal I believe...but just to be sure
+                            if (float.TryParse(rating.Replace(',', '.'), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var val))
+                            {
+                                item.CommunityRating = val;
+                            }
+                        }
+
+                        break;
+                    }
 
                 case "BirthDate":
                 case "PremiereDate":
@@ -370,144 +370,144 @@ namespace MediaBrowser.LocalMetadata.Parsers
                     break;
 
                 case "Genres":
-                {
-                    if (!reader.IsEmptyElement)
                     {
-                        using var subtree = reader.ReadSubtree();
-                        FetchFromGenresNode(subtree, item);
-                    }
-                    else
-                    {
-                        reader.Read();
-                    }
+                        if (!reader.IsEmptyElement)
+                        {
+                            using var subtree = reader.ReadSubtree();
+                            FetchFromGenresNode(subtree, item);
+                        }
+                        else
+                        {
+                            reader.Read();
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "Tags":
-                {
-                    if (!reader.IsEmptyElement)
                     {
-                        using var subtree = reader.ReadSubtree();
-                        FetchFromTagsNode(subtree, item);
-                    }
-                    else
-                    {
-                        reader.Read();
-                    }
+                        if (!reader.IsEmptyElement)
+                        {
+                            using var subtree = reader.ReadSubtree();
+                            FetchFromTagsNode(subtree, item);
+                        }
+                        else
+                        {
+                            reader.Read();
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "Persons":
-                {
-                    if (!reader.IsEmptyElement)
                     {
-                        using var subtree = reader.ReadSubtree();
-                        FetchDataFromPersonsNode(subtree, itemResult);
-                    }
-                    else
-                    {
-                        reader.Read();
-                    }
+                        if (!reader.IsEmptyElement)
+                        {
+                            using var subtree = reader.ReadSubtree();
+                            FetchDataFromPersonsNode(subtree, itemResult);
+                        }
+                        else
+                        {
+                            reader.Read();
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "Studios":
-                {
-                    if (!reader.IsEmptyElement)
                     {
-                        using var subtree = reader.ReadSubtree();
-                        FetchFromStudiosNode(subtree, item);
-                    }
-                    else
-                    {
-                        reader.Read();
-                    }
+                        if (!reader.IsEmptyElement)
+                        {
+                            using var subtree = reader.ReadSubtree();
+                            FetchFromStudiosNode(subtree, item);
+                        }
+                        else
+                        {
+                            reader.Read();
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "Shares":
-                {
-                    if (!reader.IsEmptyElement)
                     {
-                        using var subtree = reader.ReadSubtree();
-                        if (item is IHasShares hasShares)
+                        if (!reader.IsEmptyElement)
                         {
-                            FetchFromSharesNode(subtree, hasShares);
+                            using var subtree = reader.ReadSubtree();
+                            if (item is IHasShares hasShares)
+                            {
+                                FetchFromSharesNode(subtree, hasShares);
+                            }
                         }
-                    }
-                    else
-                    {
-                        reader.Read();
-                    }
+                        else
+                        {
+                            reader.Read();
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "OwnerUserId":
-                {
-                    var val = reader.ReadElementContentAsString();
-
-                    if (Guid.TryParse(val, out var guid) && !guid.Equals(Guid.Empty))
                     {
-                        if (item is Playlist playlist)
-                        {
-                            playlist.OwnerUserId = guid;
-                        }
-                    }
+                        var val = reader.ReadNormalizedString();
 
-                    break;
-                }
+                        if (Guid.TryParse(val, out var guid) && !guid.Equals(Guid.Empty))
+                        {
+                            if (item is Playlist playlist)
+                            {
+                                playlist.OwnerUserId = guid;
+                            }
+                        }
+
+                        break;
+                    }
 
                 case "Format3D":
-                {
-                    var val = reader.ReadElementContentAsString();
-
-                    if (item is Video video)
                     {
-                        if (string.Equals("HSBS", val, StringComparison.OrdinalIgnoreCase))
-                        {
-                            video.Video3DFormat = Video3DFormat.HalfSideBySide;
-                        }
-                        else if (string.Equals("HTAB", val, StringComparison.OrdinalIgnoreCase))
-                        {
-                            video.Video3DFormat = Video3DFormat.HalfTopAndBottom;
-                        }
-                        else if (string.Equals("FTAB", val, StringComparison.OrdinalIgnoreCase))
-                        {
-                            video.Video3DFormat = Video3DFormat.FullTopAndBottom;
-                        }
-                        else if (string.Equals("FSBS", val, StringComparison.OrdinalIgnoreCase))
-                        {
-                            video.Video3DFormat = Video3DFormat.FullSideBySide;
-                        }
-                        else if (string.Equals("MVC", val, StringComparison.OrdinalIgnoreCase))
-                        {
-                            video.Video3DFormat = Video3DFormat.MVC;
-                        }
-                    }
+                        var val = reader.ReadNormalizedString();
 
-                    break;
-                }
+                        if (item is Video video)
+                        {
+                            if (string.Equals("HSBS", val, StringComparison.OrdinalIgnoreCase))
+                            {
+                                video.Video3DFormat = Video3DFormat.HalfSideBySide;
+                            }
+                            else if (string.Equals("HTAB", val, StringComparison.OrdinalIgnoreCase))
+                            {
+                                video.Video3DFormat = Video3DFormat.HalfTopAndBottom;
+                            }
+                            else if (string.Equals("FTAB", val, StringComparison.OrdinalIgnoreCase))
+                            {
+                                video.Video3DFormat = Video3DFormat.FullTopAndBottom;
+                            }
+                            else if (string.Equals("FSBS", val, StringComparison.OrdinalIgnoreCase))
+                            {
+                                video.Video3DFormat = Video3DFormat.FullSideBySide;
+                            }
+                            else if (string.Equals("MVC", val, StringComparison.OrdinalIgnoreCase))
+                            {
+                                video.Video3DFormat = Video3DFormat.MVC;
+                            }
+                        }
+
+                        break;
+                    }
 
                 default:
-                {
-                    string readerName = reader.Name;
-                    if (_validProviderIds!.TryGetValue(readerName, out string? providerIdValue))
                     {
-                        var id = reader.ReadElementContentAsString();
-                        item.TrySetProviderId(providerIdValue, id);
-                    }
-                    else
-                    {
-                        reader.Skip();
-                    }
+                        string readerName = reader.Name;
+                        if (_validProviderIds!.TryGetValue(readerName, out string? providerIdValue))
+                        {
+                            var id = reader.ReadNormalizedString();
+                            item.TrySetProviderId(providerIdValue, id);
+                        }
+                        else
+                        {
+                            reader.Skip();
+                        }
 
-                    break;
-                }
+                        break;
+                    }
             }
         }
 
@@ -526,31 +526,31 @@ namespace MediaBrowser.LocalMetadata.Parsers
                     switch (reader.Name)
                     {
                         case "Share":
-                        {
-                            if (reader.IsEmptyElement)
                             {
-                                reader.Read();
-                                continue;
-                            }
-
-                            using (var subReader = reader.ReadSubtree())
-                            {
-                                var child = GetShare(subReader);
-
-                                if (child is not null)
+                                if (reader.IsEmptyElement)
                                 {
-                                    list.Add(child);
+                                    reader.Read();
+                                    continue;
                                 }
-                            }
 
-                            break;
-                        }
+                                using (var subReader = reader.ReadSubtree())
+                                {
+                                    var child = GetShare(subReader);
+
+                                    if (child is not null)
+                                    {
+                                        list.Add(child);
+                                    }
+                                }
+
+                                break;
+                            }
 
                         default:
-                        {
-                            reader.Skip();
-                            break;
-                        }
+                            {
+                                reader.Skip();
+                                break;
+                            }
                     }
                 }
                 else
@@ -580,7 +580,12 @@ namespace MediaBrowser.LocalMetadata.Parsers
                     switch (reader.Name)
                     {
                         case "Tagline":
-                            item.Tagline = reader.ReadNormalizedString();
+                            var val = reader.ReadNormalizedString();
+                            if (!string.IsNullOrEmpty(val))
+                            {
+                                item.Tagline = val;
+                            }
+
                             break;
                         default:
                             reader.Skip();
@@ -775,7 +780,8 @@ namespace MediaBrowser.LocalMetadata.Parsers
         }
 
         /// <summary>
-        /// Get linked child.
+        /// Get linked child from XML. Uses deprecated Path/LibraryItemId properties for backward compatibility
+        /// with existing XML files. These will be resolved to ItemId when the linked child is accessed.
         /// </summary>
         /// <param name="reader">The xml reader.</param>
         /// <returns>The linked child.</returns>
@@ -786,6 +792,7 @@ namespace MediaBrowser.LocalMetadata.Parsers
             reader.MoveToContent();
             reader.Read();
 
+#pragma warning disable CS0618 // Type or member is obsolete - reading legacy XML format for backward compatibility
             // Loop through each element
             while (!reader.EOF && reader.ReadState == ReadState.Interactive)
             {
@@ -815,6 +822,7 @@ namespace MediaBrowser.LocalMetadata.Parsers
             {
                 return linkedItem;
             }
+#pragma warning restore CS0618
 
             return null;
         }
@@ -842,7 +850,7 @@ namespace MediaBrowser.LocalMetadata.Parsers
                             userId = reader.ReadNormalizedString();
                             break;
                         case "CanEdit":
-                            canEdit = string.Equals(reader.ReadElementContentAsString(), "true", StringComparison.OrdinalIgnoreCase);
+                            canEdit = string.Equals(reader.ReadNormalizedString(), "true", StringComparison.OrdinalIgnoreCase);
                             break;
                         default:
                             reader.Skip();
@@ -856,7 +864,7 @@ namespace MediaBrowser.LocalMetadata.Parsers
             }
 
             // This is valid
-            if (!string.IsNullOrWhiteSpace(userId) && Guid.TryParse(userId, out var guid))
+            if (!string.IsNullOrEmpty(userId) && Guid.TryParse(userId, out var guid))
             {
                 return new PlaylistUserPermissions(guid, canEdit);
             }

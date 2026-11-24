@@ -8,7 +8,7 @@ using System.Linq;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Data.Entities;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Library;
 using MediaBrowser.Model.Querying;
@@ -21,7 +21,7 @@ namespace MediaBrowser.Controller.Entities
     /// </summary>
     public class UserRootFolder : Folder
     {
-        private readonly object _childIdsLock = new object();
+        private readonly Lock _childIdsLock = new();
         private List<Guid> _childrenIds = null;
 
         /// <summary>
@@ -52,7 +52,7 @@ namespace MediaBrowser.Controller.Entities
             }
         }
 
-        protected override List<BaseItem> LoadChildren()
+        protected override IReadOnlyList<BaseItem> LoadChildren()
         {
             lock (_childIdsLock)
             {
@@ -69,8 +69,14 @@ namespace MediaBrowser.Controller.Entities
 
         protected override QueryResult<BaseItem> GetItemsInternal(InternalItemsQuery query)
         {
-            if (query.Recursive)
+            // The user root holds no items of its own - a plain listing returns the user's
+            // views. But a request carrying any filter is a search across the libraries, so
+            // resolve it through the recursive query path even when Recursive wasn't set;
+            // otherwise the filters would be silently dropped. Recursive is set so the
+            // downstream query (ancestor/top-parent scoping) treats it as a recursive search.
+            if (query.Recursive || query.HasFilters)
             {
+                query.Recursive = true;
                 return QueryRecursive(query);
             }
 
@@ -80,7 +86,7 @@ namespace MediaBrowser.Controller.Entities
                 PresetViews = query.PresetViews
             });
 
-            return UserViewBuilder.SortAndPage(result, null, query, LibraryManager, true);
+            return UserViewBuilder.SortAndPage(result, null, query, LibraryManager);
         }
 
         public override int GetChildCount(User user)

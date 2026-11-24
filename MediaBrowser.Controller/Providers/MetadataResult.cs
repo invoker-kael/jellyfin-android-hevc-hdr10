@@ -3,6 +3,7 @@
 #pragma warning disable CA1002, CA2227, CS1591
 
 using System.Collections.Generic;
+using System.Linq;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Entities;
 
@@ -13,30 +14,33 @@ namespace MediaBrowser.Controller.Providers
         // Images aren't always used so the allocation is a waste a lot of the time
         private List<LocalImageInfo> _images;
         private List<(string Url, ImageType Type)> _remoteImages;
-
-        public MetadataResult()
-        {
-            ResultLanguage = "en";
-        }
+        private List<PersonInfo> _people;
 
         public List<LocalImageInfo> Images
         {
-            get => _images ??= new List<LocalImageInfo>();
+            get => _images ??= [];
             set => _images = value;
         }
 
         public List<(string Url, ImageType Type)> RemoteImages
         {
-            get => _remoteImages ??= new List<(string Url, ImageType Type)>();
+            get => _remoteImages ??= [];
             set => _remoteImages = value;
         }
 
-        public List<PersonInfo> People { get; set; }
+        public IReadOnlyList<PersonInfo> People
+        {
+            get => _people;
+            set => _people = value?.ToList();
+        }
 
         public bool HasMetadata { get; set; }
 
         public T Item { get; set; }
 
+        /// <summary>
+        /// Gets or sets the language the fetched metadata is in.
+        /// </summary>
         public string ResultLanguage { get; set; }
 
         public string Provider { get; set; }
@@ -47,7 +51,7 @@ namespace MediaBrowser.Controller.Providers
         {
             People ??= new List<PersonInfo>();
 
-            PeopleHelper.AddPerson(People, p);
+            PeopleHelper.AddPerson(_people, p);
         }
 
         /// <summary>
@@ -61,7 +65,7 @@ namespace MediaBrowser.Controller.Providers
             }
             else
             {
-                People.Clear();
+                _people.Clear();
             }
         }
     }

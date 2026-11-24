@@ -26,6 +26,7 @@ namespace Jellyfin.Api.Controllers;
 /// </summary>
 [Route("")]
 [Authorize]
+[Tags("UserView")]
 public class UserViewsController : BaseJellyfinApiController
 {
     private readonly IUserManager _userManager;
@@ -66,7 +67,7 @@ public class UserViewsController : BaseJellyfinApiController
     public QueryResult<BaseItemDto> GetUserViews(
         [FromQuery] Guid? userId,
         [FromQuery] bool? includeExternalContent,
-        [FromQuery, ModelBinder(typeof(CommaDelimitedArrayModelBinder))] CollectionType?[] presetViews,
+        [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] CollectionType?[] presetViews,
         [FromQuery] bool includeHidden = false)
     {
         userId = RequestHelpers.GetUserId(User, userId);
@@ -86,10 +87,10 @@ public class UserViewsController : BaseJellyfinApiController
 
         var folders = _userViewManager.GetUserViews(query);
 
-        var dtoOptions = new DtoOptions().AddClientFields(User);
-        dtoOptions.Fields = [..dtoOptions.Fields, ItemFields.PrimaryImageAspectRatio, ItemFields.DisplayPreferencesId];
+        var dtoOptions = new DtoOptions();
+        dtoOptions.Fields = [.. dtoOptions.Fields, ItemFields.PrimaryImageAspectRatio, ItemFields.DisplayPreferencesId];
 
-        var dtos = Array.ConvertAll(folders, i => _dtoService.GetBaseItemDto(i, dtoOptions, user));
+        var dtos = _dtoService.GetBaseItemDtos(folders, dtoOptions, user, skipVisibilityCheck: true);
 
         return new QueryResult<BaseItemDto>(dtos);
     }
@@ -110,7 +111,7 @@ public class UserViewsController : BaseJellyfinApiController
     public QueryResult<BaseItemDto> GetUserViewsLegacy(
         [FromRoute, Required] Guid userId,
         [FromQuery] bool? includeExternalContent,
-        [FromQuery, ModelBinder(typeof(CommaDelimitedArrayModelBinder))] CollectionType?[] presetViews,
+        [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] CollectionType?[] presetViews,
         [FromQuery] bool includeHidden = false)
         => GetUserViews(userId, includeExternalContent, presetViews, includeHidden);
 

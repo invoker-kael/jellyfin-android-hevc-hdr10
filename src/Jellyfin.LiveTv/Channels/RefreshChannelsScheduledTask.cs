@@ -40,10 +40,10 @@ namespace Jellyfin.LiveTv.Channels
         }
 
         /// <inheritdoc />
-        public string Name => _localization.GetLocalizedString("TasksRefreshChannels");
+        public string Name => _localization.GetLocalizedString("TaskRefreshChannels");
 
         /// <inheritdoc />
-        public string Description => _localization.GetLocalizedString("TasksRefreshChannelsDescription");
+        public string Description => _localization.GetLocalizedString("TaskRefreshChannelsDescription");
 
         /// <inheritdoc />
         public string Category => _localization.GetLocalizedString("TasksChannelsCategory");
@@ -79,7 +79,7 @@ namespace Jellyfin.LiveTv.Channels
                 // Every so often
                 new TaskTriggerInfo
                 {
-                    Type = TaskTriggerInfo.TriggerInterval, IntervalTicks = TimeSpan.FromHours(24).Ticks
+                    Type = TaskTriggerInfoType.IntervalTrigger, IntervalTicks = TimeSpan.FromHours(24).Ticks
                 }
             };
         }

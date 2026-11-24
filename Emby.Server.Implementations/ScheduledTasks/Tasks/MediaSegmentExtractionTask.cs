@@ -1,13 +1,13 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
-using MediaBrowser.Controller;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.MediaSegments;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.Tasks;
 
@@ -62,12 +62,13 @@ public class MediaSegmentExtractionTask : IScheduledTask
 
         var query = new InternalItemsQuery
         {
-            MediaTypes = new[] { MediaType.Video, MediaType.Audio },
+            MediaTypes = [MediaType.Video, MediaType.Audio],
             IsVirtualItem = false,
             IncludeItemTypes = _itemTypes,
             DtoOptions = new DtoOptions(true),
-            SourceTypes = new[] { SourceType.Library },
+            SourceTypes = [SourceType.Library],
             Recursive = true,
+            IncludeOwnedItems = true,
             Limit = pagesize
         };
 
@@ -91,7 +92,8 @@ public class MediaSegmentExtractionTask : IScheduledTask
                 // Only local files supported
                 if (item.IsFileProtocol && File.Exists(item.Path))
                 {
-                    await _mediaSegmentManager.RunSegmentPluginProviders(item, false, cancellationToken).ConfigureAwait(false);
+                    var libraryOptions = _libraryManager.GetLibraryOptions(item);
+                    await _mediaSegmentManager.RunSegmentPluginProviders(item, libraryOptions, false, cancellationToken).ConfigureAwait(false);
                 }
 
                 // Update progress
@@ -111,7 +113,7 @@ public class MediaSegmentExtractionTask : IScheduledTask
     {
         yield return new TaskTriggerInfo
         {
-            Type = TaskTriggerInfo.TriggerInterval,
+            Type = TaskTriggerInfoType.IntervalTrigger,
             IntervalTicks = TimeSpan.FromHours(12).Ticks
         };
     }

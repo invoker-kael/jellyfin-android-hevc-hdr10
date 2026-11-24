@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Data.Events;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions;
 using Jellyfin.LiveTv.Configuration;
 using Jellyfin.LiveTv.Timers;
@@ -773,7 +774,10 @@ namespace Jellyfin.LiveTv
                 }
             }
 
-            SearchForDuplicateShowIds(enabledTimersForSeries);
+            if (seriesTimer.SkipEpisodesInLibrary)
+            {
+                SearchForDuplicateShowIds(enabledTimersForSeries);
+            }
 
             if (deleteInvalidTimers)
             {

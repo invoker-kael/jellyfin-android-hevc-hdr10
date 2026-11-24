@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net.WebSockets;
 using System.Threading.Tasks;
@@ -47,14 +48,18 @@ namespace Emby.Server.Implementations.HttpServer
                 _logger.LogInformation("WS {IP} request", context.Connection.RemoteIpAddress);
 
                 WebSocket webSocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-
                 var connection = new WebSocketConnection(
                     _loggerFactory.CreateLogger<WebSocketConnection>(),
                     webSocket,
                     authorizationInfo,
                     context.GetNormalizedRemoteIP())
                 {
-                    OnReceive = ProcessWebSocketMessageReceived
+                    RequestUICulture = CultureInfo.CurrentUICulture
+                };
+                connection.OnReceive = result =>
+                {
+                    connection.ApplyRequestCulture();
+                    return ProcessWebSocketMessageReceived(result);
                 };
                 await using (connection.ConfigureAwait(false))
                 {
@@ -84,7 +89,7 @@ namespace Emby.Server.Implementations.HttpServer
         /// Processes the web socket message received.
         /// </summary>
         /// <param name="result">The result.</param>
-        private Task ProcessWebSocketMessageReceived(WebSocketMessageInfo result)
+        private async Task ProcessWebSocketMessageReceived(WebSocketMessageInfo result)
         {
             var tasks = new Task[_webSocketListeners.Length];
             for (var i = 0; i < _webSocketListeners.Length; ++i)
@@ -92,7 +97,7 @@ namespace Emby.Server.Implementations.HttpServer
                 tasks[i] = _webSocketListeners[i].ProcessMessageAsync(result);
             }
 
-            return Task.WhenAll(tasks);
+            await Task.WhenAll(tasks).ConfigureAwait(false);
         }
     }
 }

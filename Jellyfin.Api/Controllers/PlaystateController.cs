@@ -5,8 +5,7 @@ using System.Threading.Tasks;
 using Jellyfin.Api.Extensions;
 using Jellyfin.Api.Helpers;
 using Jellyfin.Api.ModelBinders;
-using Jellyfin.Data.Entities;
-using Jellyfin.Extensions;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.MediaEncoding;
@@ -25,6 +24,7 @@ namespace Jellyfin.Api.Controllers;
 /// </summary>
 [Route("")]
 [Authorize]
+[Tags("Session")]
 public class PlaystateController : BaseJellyfinApiController
 {
     private readonly IUserManager _userManager;
@@ -72,7 +72,8 @@ public class PlaystateController : BaseJellyfinApiController
     [HttpPost("UserPlayedItems/{itemId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UserItemDataDto>> MarkPlayedItem(
+    [Tags("UserData")]
+    public async Task<ActionResult<UserItemDataDto?>> MarkPlayedItem(
         [FromQuery] Guid? userId,
         [FromRoute, Required] Guid itemId,
         [FromQuery, ModelBinder(typeof(LegacyDateTimeModelBinder))] DateTime? datePlayed)
@@ -121,7 +122,7 @@ public class PlaystateController : BaseJellyfinApiController
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Obsolete("Kept for backwards compatibility")]
     [ApiExplorerSettings(IgnoreApi = true)]
-    public Task<ActionResult<UserItemDataDto>> MarkPlayedItemLegacy(
+    public Task<ActionResult<UserItemDataDto?>> MarkPlayedItemLegacy(
         [FromRoute, Required] Guid userId,
         [FromRoute, Required] Guid itemId,
         [FromQuery, ModelBinder(typeof(LegacyDateTimeModelBinder))] DateTime? datePlayed)
@@ -138,7 +139,8 @@ public class PlaystateController : BaseJellyfinApiController
     [HttpDelete("UserPlayedItems/{itemId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UserItemDataDto>> MarkUnplayedItem(
+    [Tags("UserData")]
+    public async Task<ActionResult<UserItemDataDto?>> MarkUnplayedItem(
         [FromQuery] Guid? userId,
         [FromRoute, Required] Guid itemId)
     {
@@ -185,7 +187,7 @@ public class PlaystateController : BaseJellyfinApiController
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Obsolete("Kept for backwards compatibility")]
     [ApiExplorerSettings(IgnoreApi = true)]
-    public Task<ActionResult<UserItemDataDto>> MarkUnplayedItemLegacy(
+    public Task<ActionResult<UserItemDataDto?>> MarkUnplayedItemLegacy(
         [FromRoute, Required] Guid userId,
         [FromRoute, Required] Guid itemId)
         => MarkUnplayedItem(userId, itemId);
@@ -272,6 +274,8 @@ public class PlaystateController : BaseJellyfinApiController
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("PlayingItems/{itemId}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [Obsolete("This endpoint is obsolete. Use ReportPlaybackStart instead")]
+    [ApiExplorerSettings(IgnoreApi = true)]
     public async Task<ActionResult> OnPlaybackStart(
         [FromRoute, Required] Guid itemId,
         [FromQuery] string? mediaSourceId,
@@ -350,6 +354,8 @@ public class PlaystateController : BaseJellyfinApiController
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("PlayingItems/{itemId}/Progress")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [Obsolete("This endpoint is obsolete. Use ReportPlaybackProgress instead")]
+    [ApiExplorerSettings(IgnoreApi = true)]
     public async Task<ActionResult> OnPlaybackProgress(
         [FromRoute, Required] Guid itemId,
         [FromQuery] string? mediaSourceId,
@@ -438,6 +444,8 @@ public class PlaystateController : BaseJellyfinApiController
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpDelete("PlayingItems/{itemId}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [Obsolete("This endpoint is obsolete. Use ReportPlaybackStop instead")]
+    [ApiExplorerSettings(IgnoreApi = true)]
     public async Task<ActionResult> OnPlaybackStopped(
         [FromRoute, Required] Guid itemId,
         [FromQuery] string? mediaSourceId,
@@ -502,7 +510,7 @@ public class PlaystateController : BaseJellyfinApiController
     /// <param name="wasPlayed">if set to <c>true</c> [was played].</param>
     /// <param name="datePlayed">The date played.</param>
     /// <returns>Task.</returns>
-    private UserItemDataDto UpdatePlayedStatus(User user, BaseItem item, bool wasPlayed, DateTime? datePlayed)
+    private UserItemDataDto? UpdatePlayedStatus(User user, BaseItem item, bool wasPlayed, DateTime? datePlayed)
     {
         if (wasPlayed)
         {

@@ -2,8 +2,9 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Data.Enums;
+using Jellyfin.Data;
 using Jellyfin.Data.Events;
+using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Session;
@@ -78,7 +79,7 @@ namespace Jellyfin.LiveTv.Recordings
 
         private async Task SendMessage(SessionMessageType name, TimerEventInfo info)
         {
-            var users = _userManager.Users
+            var users = _userManager.GetUsers()
                 .Where(i => i.HasPermission(PermissionKind.EnableLiveTvAccess))
                 .Select(i => i.Id)
                 .ToList();

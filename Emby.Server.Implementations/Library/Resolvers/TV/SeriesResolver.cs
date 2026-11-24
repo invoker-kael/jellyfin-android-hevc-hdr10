@@ -31,7 +31,7 @@ namespace Emby.Server.Implementations.Library.Resolvers.TV
         /// </summary>
         /// <param name="logger">The logger.</param>
         /// <param name="namingOptions">The naming options.</param>
-        public SeriesResolver(ILogger<SeriesResolver> logger,  NamingOptions namingOptions)
+        public SeriesResolver(ILogger<SeriesResolver> logger, NamingOptions namingOptions)
         {
             _logger = logger;
             _namingOptions = namingOptions;
@@ -57,6 +57,11 @@ namespace Emby.Server.Implementations.Library.Resolvers.TV
                     return null;
                 }
 
+                if (args.Parent is not null && args.Parent.IsRoot)
+                {
+                    return null;
+                }
+
                 var seriesInfo = Naming.TV.SeriesResolver.Resolve(_namingOptions, args.Path);
 
                 var collectionType = args.GetCollectionType();
@@ -69,7 +74,8 @@ namespace Emby.Server.Implementations.Library.Resolvers.TV
                         return new Series
                         {
                             Path = args.Path,
-                            Name = seriesInfo.Name
+                            Name = seriesInfo.Name,
+                            ProductionYear = seriesInfo.Year
                         };
                     }
                 }
@@ -118,7 +124,7 @@ namespace Emby.Server.Implementations.Library.Resolvers.TV
             {
                 if (child.IsDirectory)
                 {
-                    if (IsSeasonFolder(child.FullName, isTvContentType))
+                    if (IsSeasonFolder(child.FullName, path, isTvContentType))
                     {
                         _logger.LogDebug("{Path} is a series because of season folder {Dir}.", path, child.FullName);
                         return true;
@@ -155,11 +161,12 @@ namespace Emby.Server.Implementations.Library.Resolvers.TV
         /// Determines whether [is season folder] [the specified path].
         /// </summary>
         /// <param name="path">The path.</param>
+        /// <param name="parentPath">The parentpath.</param>
         /// <param name="isTvContentType">if set to <c>true</c> [is tv content type].</param>
         /// <returns><c>true</c> if [is season folder] [the specified path]; otherwise, <c>false</c>.</returns>
-        private static bool IsSeasonFolder(string path, bool isTvContentType)
+        private static bool IsSeasonFolder(string path, string parentPath, bool isTvContentType)
         {
-            var seasonNumber = SeasonPathParser.Parse(path, isTvContentType, isTvContentType).SeasonNumber;
+            var seasonNumber = SeasonPathParser.Parse(path, parentPath, isTvContentType, isTvContentType).SeasonNumber;
 
             return seasonNumber.HasValue;
         }

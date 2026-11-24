@@ -5,15 +5,19 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.Versioning;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
 
 namespace MediaBrowser.MediaEncoding.Encoder
 {
     public partial class EncoderValidator
     {
-        private static readonly string[] _requiredDecoders = new[]
-        {
+        private static readonly string[] _requiredDecoders =
+        [
             "h264",
             "hevc",
             "vp8",
@@ -55,10 +59,10 @@ namespace MediaBrowser.MediaEncoding.Encoder
             "vp8_rkmpp",
             "vp9_rkmpp",
             "av1_rkmpp"
-        };
+        ];
 
-        private static readonly string[] _requiredEncoders = new[]
-        {
+        private static readonly string[] _requiredEncoders =
+        [
             "libx264",
             "libx265",
             "libsvtav1",
@@ -95,10 +99,10 @@ namespace MediaBrowser.MediaEncoding.Encoder
             "h264_rkmpp",
             "hevc_rkmpp",
             "mjpeg_rkmpp"
-        };
+        ];
 
-        private static readonly string[] _requiredFilters = new[]
-        {
+        private static readonly string[] _requiredFilters =
+        [
             // sw
             "alphasrc",
             "zscale",
@@ -148,19 +152,28 @@ namespace MediaBrowser.MediaEncoding.Encoder
             "scale_rkrga",
             "vpp_rkrga",
             "overlay_rkrga"
+        ];
+
+        private static readonly Dictionary<FilterOptionType, (string, string)> _filterOptionsDict = new Dictionary<FilterOptionType, (string, string)>
+        {
+            { FilterOptionType.ScaleCudaFormat, ("scale_cuda", "format") },
+            { FilterOptionType.TonemapCudaName, ("tonemap_cuda", "GPU accelerated HDR to SDR tonemapping") },
+            { FilterOptionType.TonemapOpenclBt2390, ("tonemap_opencl", "bt2390") },
+            { FilterOptionType.OverlayOpenclFrameSync, ("overlay_opencl", "Action to take when encountering EOF from secondary input") },
+            { FilterOptionType.OverlayVaapiFrameSync, ("overlay_vaapi", "Action to take when encountering EOF from secondary input") },
+            { FilterOptionType.OverlayVulkanFrameSync, ("overlay_vulkan", "Action to take when encountering EOF from secondary input") },
+            { FilterOptionType.TransposeOpenclReversal, ("transpose_opencl", "rotate by half-turn") },
+            { FilterOptionType.OverlayOpenclAlphaFormat, ("overlay_opencl", "alpha_format") },
+            { FilterOptionType.OverlayCudaAlphaFormat, ("overlay_cuda", "alpha_format") }
         };
 
-        private static readonly Dictionary<int, string[]> _filterOptionsDict = new Dictionary<int, string[]>
+        private static readonly Dictionary<BitStreamFilterOptionType, (string, string)> _bsfOptionsDict = new Dictionary<BitStreamFilterOptionType, (string, string)>
         {
-            { 0, new string[] { "scale_cuda", "format" } },
-            { 1, new string[] { "tonemap_cuda", "GPU accelerated HDR to SDR tonemapping" } },
-            { 2, new string[] { "tonemap_opencl", "bt2390" } },
-            { 3, new string[] { "overlay_opencl", "Action to take when encountering EOF from secondary input" } },
-            { 4, new string[] { "overlay_vaapi", "Action to take when encountering EOF from secondary input" } },
-            { 5, new string[] { "overlay_vulkan", "Action to take when encountering EOF from secondary input" } },
-            { 6, new string[] { "transpose_opencl", "rotate by half-turn" } },
-            { 7, new string[] { "overlay_opencl", "alpha_format" } },
-            { 8, new string[] { "overlay_cuda", "alpha_format" } }
+            { BitStreamFilterOptionType.HevcMetadataRemoveDovi, ("hevc_metadata", "remove_dovi") },
+            { BitStreamFilterOptionType.HevcMetadataRemoveHdr10Plus, ("hevc_metadata", "remove_hdr10plus") },
+            { BitStreamFilterOptionType.Av1MetadataRemoveDovi, ("av1_metadata", "remove_dovi") },
+            { BitStreamFilterOptionType.Av1MetadataRemoveHdr10Plus, ("av1_metadata", "remove_hdr10plus") },
+            { BitStreamFilterOptionType.DoviRpuStrip, ("dovi_rpu", "strip") }
         };
 
         // These are the library versions that corresponds to our minimum ffmpeg version 4.4 according to the version table below
@@ -173,15 +186,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
             { "libavdevice", new Version(58, 13) },
             { "libavfilter", new Version(7, 110) },
             { "libswscale", new Version(5, 9) },
-            { "libswresample", new Version(3, 9) },
-            { "libpostproc", new Version(55, 9) }
+            { "libswresample", new Version(3, 9) }
         };
 
         private readonly ILogger _logger;
 
         private readonly string _encoderPath;
-
-        private readonly Version _minFFmpegMultiThreadedCli = new Version(7, 0);
 
         public EncoderValidator(ILogger logger, string encoderPath)
         {
@@ -287,7 +297,11 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
         public IEnumerable<string> GetFilters() => GetFFmpegFilters();
 
-        public IDictionary<int, bool> GetFiltersWithOption() => GetFFmpegFiltersWithOption();
+        public IDictionary<FilterOptionType, bool> GetFiltersWithOption() => _filterOptionsDict
+            .ToDictionary(item => item.Key, item => CheckFilterWithOption(item.Value.Item1, item.Value.Item2));
+
+        public IDictionary<BitStreamFilterOptionType, bool> GetBitStreamFiltersWithOption() => _bsfOptionsDict
+            .ToDictionary(item => item.Key, item => CheckBitStreamFilterWithOption(item.Value.Item1, item.Value.Item2));
 
         public Version? GetFFmpegVersion()
         {
@@ -441,6 +455,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
             }
         }
 
+        [SupportedOSPlatform("macos")]
+        public bool CheckIsVideoToolboxAv1DecodeAvailable()
+        {
+            return ApplePlatformHelper.HasAv1HardwareAccel(_logger);
+        }
+
         private IEnumerable<string> GetHwaccelTypes()
         {
             string? output = null;
@@ -455,10 +475,10 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
             if (string.IsNullOrWhiteSpace(output))
             {
-                return Enumerable.Empty<string>();
+                return [];
             }
 
-            var found = output.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Skip(1).Distinct().ToList();
+            var found = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Skip(1).Distinct().ToList();
             _logger.LogInformation("Available hwaccel types: {Types}", found);
 
             return found;
@@ -492,6 +512,34 @@ namespace MediaBrowser.MediaEncoding.Encoder
             return false;
         }
 
+        public bool CheckBitStreamFilterWithOption(string filter, string option)
+        {
+            if (string.IsNullOrEmpty(filter) || string.IsNullOrEmpty(option))
+            {
+                return false;
+            }
+
+            string output;
+            try
+            {
+                output = GetProcessOutput(_encoderPath, "-h bsf=" + filter, false, null);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error detecting the given bit stream filter");
+                return false;
+            }
+
+            if (output.Contains("Bit stream filter " + filter, StringComparison.Ordinal))
+            {
+                return output.Contains(option, StringComparison.Ordinal);
+            }
+
+            _logger.LogWarning("Bit stream filter: {Name} with option {Option} is not available", filter, option);
+
+            return false;
+        }
+
         public bool CheckSupportedRuntimeKey(string keyDesc, Version? ffmpegVersion)
         {
             if (string.IsNullOrEmpty(keyDesc))
@@ -502,9 +550,9 @@ namespace MediaBrowser.MediaEncoding.Encoder
             string output;
             try
             {
-                // With multi-threaded cli support, FFmpeg 7 is less sensitive to keyboard input
-                var duration = ffmpegVersion >= _minFFmpegMultiThreadedCli ? 10000 : 1000;
-                output = GetProcessOutput(_encoderPath, $"-hide_banner -f lavfi -i nullsrc=s=1x1:d={duration} -f null -", true, "?");
+                // Start a dummy encode of 1x1@1fps. Send '?' to stdin to get the help/keybind text, followed by 'q' to stop the job immediately
+                // As a safeguard in case 'q' doesn't stop the job, the dummy input has a max duration of 5 (realtime) seconds
+                output = GetProcessOutput(_encoderPath, $"-hide_banner -re -f lavfi -i nullsrc=s=1x1:r=1:d=5 -f null -", true, "?q");
             }
             catch (Exception ex)
             {
@@ -520,6 +568,11 @@ namespace MediaBrowser.MediaEncoding.Encoder
             return !string.IsNullOrEmpty(flag) && GetProcessExitCode(_encoderPath, $"-loglevel quiet -hwaccel_flags +{flag} -hide_banner -f lavfi -i nullsrc=s=1x1:d=100 -f null -");
         }
 
+        public bool CheckSupportedProberOption(string option, string proberPath)
+        {
+            return !string.IsNullOrEmpty(option) && GetProcessExitCode(proberPath, $"-loglevel quiet -f lavfi -i nullsrc=s=1x1:d=1 -{option}");
+        }
+
         private IEnumerable<string> GetCodecs(Codec codec)
         {
             string codecstr = codec == Codec.Encoder ? "encoders" : "decoders";
@@ -531,12 +584,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error detecting available {Codec}", codecstr);
-                return Enumerable.Empty<string>();
+                return [];
             }
 
             if (string.IsNullOrWhiteSpace(output))
             {
-                return Enumerable.Empty<string>();
+                return [];
             }
 
             var required = codec == Codec.Encoder ? _requiredEncoders : _requiredDecoders;
@@ -561,12 +614,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error detecting available filters");
-                return Enumerable.Empty<string>();
+                return [];
             }
 
             if (string.IsNullOrWhiteSpace(output))
             {
-                return Enumerable.Empty<string>();
+                return [];
             }
 
             var found = FilterRegex()
@@ -577,20 +630,6 @@ namespace MediaBrowser.MediaEncoding.Encoder
             _logger.LogInformation("Available filters: {Filters}", found);
 
             return found;
-        }
-
-        private Dictionary<int, bool> GetFFmpegFiltersWithOption()
-        {
-            Dictionary<int, bool> dict = new Dictionary<int, bool>();
-            for (int i = 0; i < _filterOptionsDict.Count; i++)
-            {
-                if (_filterOptionsDict.TryGetValue(i, out var val) && val.Length == 2)
-                {
-                    dict.Add(i, CheckFilterWithOption(val[0], val[1]));
-                }
-            }
-
-            return dict;
         }
 
         private string GetProcessOutput(string path, string arguments, bool readStdErr, string? testKey)
@@ -605,7 +644,9 @@ namespace MediaBrowser.MediaEncoding.Encoder
                     WindowStyle = ProcessWindowStyle.Hidden,
                     ErrorDialog = false,
                     RedirectStandardInput = redirectStandardIn,
+                    StandardOutputEncoding = Encoding.UTF8,
                     RedirectStandardOutput = true,
+                    StandardErrorEncoding = Encoding.UTF8,
                     RedirectStandardError = true
                 }
             })
@@ -620,8 +661,15 @@ namespace MediaBrowser.MediaEncoding.Encoder
                     writer.Write(testKey);
                 }
 
-                using var reader = readStdErr ? process.StandardError : process.StandardOutput;
-                return reader.ReadToEnd();
+                // Drain both streams concurrently to prevent pipe hanging, see #17429
+                using var standardOutput = process.StandardOutput;
+                using var standardError = process.StandardError;
+                var standardOutputTask = standardOutput.ReadToEndAsync();
+                var standardErrorTask = standardError.ReadToEndAsync();
+                process.WaitForExit();
+                Task.WaitAll(standardOutputTask, standardErrorTask);
+
+                return (readStdErr ? standardErrorTask : standardOutputTask).GetAwaiter().GetResult();
             }
         }
 
@@ -653,7 +701,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
         [GeneratedRegex("^\\s\\S{6}\\s(?<codec>[\\w|-]+)\\s+.+$", RegexOptions.Multiline)]
         private static partial Regex CodecRegex();
 
-        [GeneratedRegex("^\\s\\S{3}\\s(?<filter>[\\w|-]+)\\s+.+$", RegexOptions.Multiline)]
+        [GeneratedRegex("^\\s\\S{2,3}\\s(?<filter>[\\w|-]+)\\s+.+$", RegexOptions.Multiline)]
         private static partial Regex FilterRegex();
     }
 }

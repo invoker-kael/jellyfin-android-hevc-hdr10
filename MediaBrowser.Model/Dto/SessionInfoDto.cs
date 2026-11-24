@@ -149,13 +149,7 @@ public class SessionInfoDto
     public IReadOnlyList<QueueItem>? NowPlayingQueue { get; set; }
 
     /// <summary>
-    /// Gets or sets the now playing queue full items.
-    /// </summary>
-    /// <value>The now playing queue full items.</value>
-    public IReadOnlyList<BaseItemDto>? NowPlayingQueueFullItems { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the session has a custom device name.
+    /// Gets or sets a value indicating whether this session has a custom device name.
     /// </summary>
     /// <value><c>true</c> if this session has a custom device name; otherwise, <c>false</c>.</value>
     public bool HasCustomDeviceName { get; set; }
@@ -163,7 +157,7 @@ public class SessionInfoDto
     /// <summary>
     /// Gets or sets the playlist item id.
     /// </summary>
-    /// <value>The splaylist item id.</value>
+    /// <value>The playlist item id.</value>
     public string? PlaylistItemId { get; set; }
 
     /// <summary>
