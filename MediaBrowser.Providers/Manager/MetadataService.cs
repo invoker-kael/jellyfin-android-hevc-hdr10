@@ -1247,7 +1247,7 @@ namespace MediaBrowser.Providers.Manager
                 }
             }
 
-            if (replaceData || !target.PremiereDate.HasValue)
+            if (replaceData || !target.PremiereDate.HasValue || (IsYearOnlyDate(target.PremiereDate.Value) && source.PremiereDate.HasValue))
             {
                 target.PremiereDate = source.PremiereDate;
             }
@@ -1425,6 +1425,8 @@ namespace MediaBrowser.Providers.Manager
                 }
             }
         }
+
+        private static bool IsYearOnlyDate(DateTime date) => date.Month == 1 && date.Day == 1;
 
         private static void MergePeople(IReadOnlyList<PersonInfo> source, IReadOnlyList<PersonInfo> target)
         {

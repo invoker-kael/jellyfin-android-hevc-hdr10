@@ -27,18 +27,40 @@ jobs:
         ref: ${{ inputs.ref }}
         repository: ${{ inputs.repository }}
 
+    - name: Determine .NET SDK version
+      id: dotnet
+      run: |
+        set -euo pipefail
+        version="$(jq -er '.sdk.version' global.json)"
+        if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\. ]]; then
+          echo "Invalid .NET SDK version in global.json: $version" >&2
+          exit 1
+        fi
+        echo "version=${version%.*}.x" >> "$GITHUB_OUTPUT"
+
     - name: Configure .NET
       uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
       with:
-        dotnet-version: '10.0.x'
+        dotnet-version: ${{ steps.dotnet.outputs.version }}
 
     - name: Create File
       run: dotnet test tests/Jellyfin.Server.Integration.Tests/Jellyfin.Server.Integration.Tests.csproj -c Release --filter Jellyfin.Server.Integration.Tests.OpenApiSpecTests
+
+    - name: Locate OpenAPI specification
+      id: spec
+      run: |
+        set -euo pipefail
+        spec_path="$(find tests/Jellyfin.Server.Integration.Tests/bin/Release -type f -path '*/net*/openapi.json' -print -quit)"
+        if [[ -z "$spec_path" ]]; then
+          echo "Generated OpenAPI specification was not found." >&2
+          exit 1
+        fi
+        echo "path=$spec_path" >> "$GITHUB_OUTPUT"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact }}
-        path: tests/Jellyfin.Server.Integration.Tests/bin/Release/net10.0/openapi.json
+        path: ${{ steps.spec.outputs.path }}
         retention-days: 14
         if-no-files-found: error
