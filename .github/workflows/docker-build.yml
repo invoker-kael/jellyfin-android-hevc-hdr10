@@ -1,0 +1,94 @@
+name: Build Jellyfin server Docker image
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Git branch or commit to build
+        required: true
+        default: codex/android-hevc-hdr10-config
+        type: string
+      image_tag:
+        description: Docker Hub tag for the candidate image
+        required: true
+        default: 12.4.0-android-hdr-7fce8fa
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out requested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref }}
+          path: source
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run server test suite
+        working-directory: source
+        run: dotnet test Jellyfin.sln --configuration Release --verbosity minimal
+
+      - name: Build and smoke test image
+        id: image
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git -C source rev-parse HEAD)"
+          image="invokerkael/jellyfin-android-hevc-hdr10:${IMAGE_TAG}"
+          docker build --pull --platform linux/amd64 --file source/deploy/Dockerfile.server --build-arg "JELLYFIN_SERVER_COMMIT_SHA=${source_sha}" --tag "${image}" source
+          server_version="$(docker run --rm --entrypoint /jellyfin/jellyfin "${image}" --version)"
+          case "${server_version}" in
+            "Jellyfin.Server 12.4.0"*) ;;
+            *)
+              printf '::error::Unexpected server version: %s\n' "${server_version}"
+              exit 1
+              ;;
+          esac
+          image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
+          printf 'image=%s\n' "${image}" >> "${GITHUB_OUTPUT}"
+          printf 'source_sha=%s\n' "${source_sha}" >> "${GITHUB_OUTPUT}"
+          printf 'server_version=%s\n' "${server_version}" >> "${GITHUB_OUTPUT}"
+          printf 'image_id=%s\n' "${image_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOCKERHUB_TOKEN}" ]]; then
+            printf '::error::Add the DOCKERHUB_TOKEN repository secret before publishing.\n'
+            exit 1
+          fi
+          printf '%s' "${DOCKERHUB_TOKEN}" | docker login --username invokerkael --password-stdin
+
+      - name: Push candidate image and record identity
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.image }}
+          SOURCE_SHA: ${{ steps.image.outputs.source_sha }}
+          SERVER_VERSION: ${{ steps.image.outputs.server_version }}
+          IMAGE_ID: ${{ steps.image.outputs.image_id }}
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE_REF}"
+          digest="$(docker buildx imagetools inspect "${IMAGE_REF}" | awk '$1 == "Digest:" { print $2; exit }')"
+          if [[ -z "${digest}" ]]; then
+            printf '::error::Could not resolve the pushed image digest.\n'
+            exit 1
+          fi
+          {
+            printf '### Candidate image\n\n'
+            printf -- '- Source commit: `%s`\n' "${SOURCE_SHA}"
+            printf -- '- Server version: `%s`\n' "${SERVER_VERSION}"
+            printf -- '- Docker image: `%s@%s`\n' "${IMAGE_REF}" "${digest}"
+            printf -- '- Local image ID: `%s`\n' "${IMAGE_ID}"
+          } >> "${GITHUB_STEP_SUMMARY}"
