@@ -104,15 +104,16 @@ jobs:
         id: diff
         run: |
           {
-            echo 'body<<EOF'
+            delimiter="$(openssl rand -hex 16)"
+            printf 'body<<%s\n' "$delimiter"
             for file in Jellyfin.Data.dll MediaBrowser.Common.dll MediaBrowser.Controller.dll MediaBrowser.Model.dll Emby.Naming.dll Jellyfin.Extensions.dll Jellyfin.MediaEncoding.Keyframes.dll Jellyfin.Database.Implementations.dll; do
               COMPAT_OUTPUT="$( { apicompat --left ./abi-base/${file} --right ./abi-head/${file}; } 2>&1 || true )"
               if [ "APICompat ran successfully without finding any breaking changes." != "${COMPAT_OUTPUT}" ]; then
-                printf "\n${file}\n${COMPAT_OUTPUT}\n"
+                printf '\n%s\n%s\n' "$file" "$COMPAT_OUTPUT"
               fi
             done
-            echo EOF
-          } >> $GITHUB_OUTPUT
+            printf '%s\n' "$delimiter"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Find difference comment
         uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad # v4.0.0
@@ -129,7 +130,7 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           comment-id: ${{ steps.find-comment.outputs.comment-id }}
           edit-mode: replace
-          token: ${{ secrets.JF_BOT_TOKEN }}
+          token: ${{ github.token }}
           body: |
             <!--abi-diff-workflow-comment-->
             <details>
@@ -148,7 +149,7 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           comment-id: ${{ steps.find-comment.outputs.comment-id }}
           edit-mode: replace
-          token: ${{ secrets.JF_BOT_TOKEN }}
+          token: ${{ github.token }}
           body: |
             <!--abi-diff-workflow-comment-->
             <details>
