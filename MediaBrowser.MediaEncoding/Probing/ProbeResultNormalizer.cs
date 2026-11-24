@@ -1275,7 +1275,7 @@ namespace MediaBrowser.MediaEncoding.Probing
             }
         }
 
-        private static long? ParseDurationTicks(string? duration)
+        private static long? ParseDurationTicks(string duration)
         {
             if (!double.TryParse(duration, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
                 || !double.IsFinite(seconds)
