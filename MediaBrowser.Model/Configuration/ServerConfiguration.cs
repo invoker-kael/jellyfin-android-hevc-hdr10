@@ -145,6 +145,61 @@ public class ServerConfiguration : BaseApplicationConfiguration
     public int MinResumeDurationSeconds { get; set; } = 300;
 
     /// <summary>
+    /// Gets or sets a value indicating whether HDR10 may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableAndroidHdr10AutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether HLG may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableAndroidHlgAutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Dolby Vision profile 5 may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableAndroidDolbyVisionAutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Dolby Vision with an HDR10 base layer may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableAndroidDolbyVisionWithHdr10AutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Dolby Vision with an HLG base layer may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableAndroidDolbyVisionWithHlgAutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Dolby Vision with an SDR base layer may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableAndroidDolbyVisionWithSdrAutoDetection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether HDR10+ may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableHdr10Plus { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Dolby Vision with HDR10+ may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableDolbyVisionWithHdr10Plus { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Dolby Vision with an enhancement layer may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableDolbyVisionWithEnhancementLayer { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Dolby Vision with an enhancement layer and HDR10+ may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableDolbyVisionWithEnhancementLayerAndHdr10Plus { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether invalid Dolby Vision configurations may be advertised by default in client playback profiles.
+    /// </summary>
+    public bool EnableDolbyVisionInvalid { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets the minimum minutes of a book that must be played in order for playstate to be updated.
     /// </summary>
     /// <value>The min resume in minutes.</value>
@@ -287,5 +342,5 @@ public class ServerConfiguration : BaseApplicationConfiguration
     /// <summary>
     /// Gets or sets a value indicating whether old authorization methods are allowed.
     /// </summary>
-    public bool EnableLegacyAuthorization { get; set; } = true;
+    public bool EnableLegacyAuthorization { get; set; }
 }

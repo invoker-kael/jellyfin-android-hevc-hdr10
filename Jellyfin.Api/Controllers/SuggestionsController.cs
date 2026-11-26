@@ -23,6 +23,7 @@ namespace Jellyfin.Api.Controllers;
 /// </summary>
 [Route("")]
 [Authorize]
+[Tags("Suggestion")]
 public class SuggestionsController : BaseJellyfinApiController
 {
     private readonly IDtoService _dtoService;
@@ -66,18 +67,12 @@ public class SuggestionsController : BaseJellyfinApiController
         [FromQuery] int? limit,
         [FromQuery] bool enableTotalRecordCount = false)
     {
-        User? user;
-        if (userId.IsNullOrEmpty())
-        {
-            user = null;
-        }
-        else
-        {
-            var requestUserId = RequestHelpers.GetUserId(User, userId);
-            user = _userManager.GetUserById(requestUserId);
-        }
+        var requestUserId = RequestHelpers.GetUserId(User, userId);
+        User? user = requestUserId.IsEmpty()
+            ? null
+            : _userManager.GetUserById(requestUserId);
 
-        var dtoOptions = new DtoOptions().AddClientFields(User);
+        var dtoOptions = new DtoOptions();
         var result = _libraryManager.GetItemsResult(new InternalItemsQuery(user)
         {
             OrderBy = new[] { (ItemSortBy.Random, SortOrder.Descending) },

@@ -2,11 +2,15 @@ name: "CodeQL"
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, codex/jellyfin-12.4-clean-base ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, codex/jellyfin-12.4-clean-base ]
   schedule:
     - cron: '24 2 * * 4'
+
+permissions:
+  contents: read
+  security-events: write
 
 jobs:
   analyze:
@@ -20,18 +24,22 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
     - name: Setup .NET
-      uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5.0.0
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
       with:
-        dotnet-version: '9.0.x'
+        dotnet-version: '10.0.x'
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@f443b600d91635bebf5b0d9ebc620189c0d6fba5 # v4.30.8
+      uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
       with:
         languages: ${{ matrix.language }}
         queries: +security-extended
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@f443b600d91635bebf5b0d9ebc620189c0d6fba5 # v4.30.8
+        build-mode: manual
+
+    - name: Build
+      run: dotnet build Jellyfin.Server/Jellyfin.Server.csproj --configuration Release
+
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@f443b600d91635bebf5b0d9ebc620189c0d6fba5 # v4.30.8
+      uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
