@@ -2605,10 +2605,10 @@ namespace Emby.Server.Implementations.Library
                     _logger.LogWarning(
                         "{ImageType} image for {ItemName} ({ItemId}) not found at \"{ImagePath}\", source was {SourcePath}",
                         img.Type,
-                        item.Name,
+                        item.Name?.ReplaceLineEndings(string.Empty) ?? string.Empty,
                         item.Id,
-                        image.Path,
-                        img.Path);
+                        image.Path?.ReplaceLineEndings(string.Empty) ?? string.Empty,
+                        img.Path?.ReplaceLineEndings(string.Empty) ?? string.Empty);
                     continue;
                 }
 
@@ -3891,20 +3891,29 @@ namespace Emby.Server.Implementations.Library
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                var personName = person.Name;
+                if (personName is null)
+                {
+                    continue;
+                }
+
                 var itemUpdateType = ItemUpdateType.MetadataDownload;
                 var saveEntity = false;
-                var personEntity = GetPerson(person.Name);
+                var personEntity = GetPerson(personName);
 
                 if (personEntity is null)
                 {
                     try
                     {
-                        personEntity = GetOrCreatePerson(person.Name);
+                        personEntity = GetOrCreatePerson(personName);
                         saveEntity = true;
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Failed to create person {Name}", person.Name);
+                        _logger.LogWarning(
+                            "Failed to create person {Name}. Exception: {Exception}",
+                            personName.ReplaceLineEndings(string.Empty),
+                            ex.ToString().ReplaceLineEndings(string.Empty));
                         continue;
                     }
                 }
@@ -4153,16 +4162,24 @@ namespace Emby.Server.Implementations.Library
         public void CreateShortcut(string virtualFolderPath, MediaPathInfo pathInfo)
         {
             var path = pathInfo.Path;
-            var rootFolderPath = _configurationManager.ApplicationPaths.DefaultUserViewsPath;
+            var rootFolderPath = Path.GetFullPath(virtualFolderPath);
 
             var shortcutFilename = Path.GetFileNameWithoutExtension(path);
 
-            var lnk = Path.Combine(virtualFolderPath, shortcutFilename + ShortcutFileExtension);
+            var lnk = Path.GetFullPath(Path.Combine(rootFolderPath, shortcutFilename + ShortcutFileExtension));
+            var relativePath = Path.GetRelativePath(rootFolderPath, lnk);
+            if (relativePath == "."
+                || Path.IsPathRooted(relativePath)
+                || relativePath == ".."
+                || relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("Shortcut path resolves outside its virtual folder.", nameof(virtualFolderPath));
+            }
 
             while (File.Exists(lnk))
             {
                 shortcutFilename += "1";
-                lnk = Path.Combine(virtualFolderPath, shortcutFilename + ShortcutFileExtension);
+                lnk = Path.GetFullPath(Path.Combine(rootFolderPath, shortcutFilename + ShortcutFileExtension));
             }
 
             _fileSystem.CreateShortcut(lnk, _appHost.ReverseVirtualPath(path));

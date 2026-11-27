@@ -164,7 +164,7 @@ namespace Emby.Server.Implementations.QuickConnect
             result.Authenticated = true;
             _currentRequests[code] = result;
 
-            _logger.LogDebug("Authorizing device with code {Code} to login as user {UserId}", code, userId);
+            _logger.LogDebug("Authorizing device to login as user {UserId}", userId);
 
             return true;
         }

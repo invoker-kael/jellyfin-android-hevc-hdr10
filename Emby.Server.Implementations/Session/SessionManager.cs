@@ -817,10 +817,10 @@ namespace Emby.Server.Implementations.Session
             {
                 _logger.LogInformation(
                     "User {0} started playback of '{1}' ({2} {3})",
-                    session.UserName,
-                    info.Item.Name,
-                    session.Client,
-                    session.ApplicationVersion);
+                    session.UserName?.ReplaceLineEndings(string.Empty) ?? string.Empty,
+                    info.Item.Name?.ReplaceLineEndings(string.Empty) ?? string.Empty,
+                    session.Client?.ReplaceLineEndings(string.Empty) ?? string.Empty,
+                    session.ApplicationVersion?.ReplaceLineEndings(string.Empty) ?? string.Empty);
             }
 
             await _eventManager.PublishAsync(eventArgs).ConfigureAwait(false);
@@ -1120,11 +1120,11 @@ namespace Emby.Server.Implementations.Session
 
                 _logger.LogInformation(
                     "User {0} stopped playback of '{1}' at {2}ms ({3} {4})",
-                    session.UserName,
-                    info.Item.Name,
+                    session.UserName?.ReplaceLineEndings(string.Empty) ?? string.Empty,
+                    info.Item.Name?.ReplaceLineEndings(string.Empty) ?? string.Empty,
                     msString,
-                    session.Client,
-                    session.ApplicationVersion);
+                    session.Client?.ReplaceLineEndings(string.Empty) ?? string.Empty,
+                    session.ApplicationVersion?.ReplaceLineEndings(string.Empty) ?? string.Empty);
             }
 
             if (info.NowPlayingQueue is not null)

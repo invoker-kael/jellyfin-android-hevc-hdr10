@@ -615,8 +615,8 @@ namespace Jellyfin.Server.Implementations.Users
                 {
                     _logger.LogInformation(
                         "Authentication request for {UserName} has been denied (IP: {IP}).",
-                        username,
-                        remoteEndPoint);
+                        username.ReplaceLineEndings(string.Empty),
+                        remoteEndPoint.ReplaceLineEndings(string.Empty));
                     throw new AuthenticationException("Invalid username or password entered.");
                 }
 
@@ -624,8 +624,8 @@ namespace Jellyfin.Server.Implementations.Users
                 {
                     _logger.LogInformation(
                         "Authentication request for {UserName} has been denied because this account is currently disabled (IP: {IP}).",
-                        username,
-                        remoteEndPoint);
+                        username.ReplaceLineEndings(string.Empty),
+                        remoteEndPoint.ReplaceLineEndings(string.Empty));
                     throw new SecurityException(
                         $"The {user.Username} account is currently disabled. Please consult with your administrator.");
                 }
@@ -635,8 +635,8 @@ namespace Jellyfin.Server.Implementations.Users
                 {
                     _logger.LogInformation(
                         "Authentication request for {UserName} forbidden: remote access disabled and user not in local network (IP: {IP}).",
-                        username,
-                        remoteEndPoint);
+                        username.ReplaceLineEndings(string.Empty),
+                        remoteEndPoint.ReplaceLineEndings(string.Empty));
                     throw new SecurityException("Forbidden.");
                 }
 
@@ -644,8 +644,8 @@ namespace Jellyfin.Server.Implementations.Users
                 {
                     _logger.LogInformation(
                         "Authentication request for {UserName} is not allowed at this time due parental restrictions (IP: {IP}).",
-                        username,
-                        remoteEndPoint);
+                        username.ReplaceLineEndings(string.Empty),
+                        remoteEndPoint.ReplaceLineEndings(string.Empty));
                     throw new SecurityException("User is not allowed access at this time.");
                 }
 

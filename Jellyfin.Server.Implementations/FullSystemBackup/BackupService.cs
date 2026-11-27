@@ -74,6 +74,7 @@ public class BackupService : IBackupService
     /// <inheritdoc/>
     public void ScheduleRestoreAndRestartServer(string archivePath)
     {
+        archivePath = GetBackupArchivePath(archivePath);
         _applicationHost.RestoreBackupPath = archivePath;
         _applicationHost.ShouldRestart = true;
         _applicationHost.NotifyPendingRestart();
@@ -87,7 +88,8 @@ public class BackupService : IBackupService
     /// <inheritdoc/>
     public async Task RestoreBackupAsync(string archivePath)
     {
-        _logger.LogWarning("Begin restoring system to {BackupArchive}", archivePath); // Info isn't cutting it
+        archivePath = GetBackupArchivePath(archivePath);
+        _logger.LogWarning("Begin restoring system to {BackupArchive}", archivePath.ReplaceLineEndings(string.Empty)); // Info isn't cutting it
         if (!File.Exists(archivePath))
         {
             throw new FileNotFoundException($"Requested backup file '{archivePath}' does not exist.");
@@ -489,6 +491,7 @@ public class BackupService : IBackupService
     /// <inheritdoc/>
     public async Task<BackupManifestDto?> GetBackupManifest(string archivePath)
     {
+        archivePath = GetBackupArchivePath(archivePath);
         if (!File.Exists(archivePath))
         {
             return null;
@@ -501,7 +504,10 @@ public class BackupService : IBackupService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Tried to load manifest from archive {Path} but failed", archivePath);
+            _logger.LogWarning(
+                "Tried to load manifest from archive {Path} but failed. Exception: {Exception}",
+                archivePath.ReplaceLineEndings(string.Empty),
+                ex.ToString().ReplaceLineEndings(string.Empty));
             return null;
         }
 
@@ -545,8 +551,9 @@ public class BackupService : IBackupService
         return manifests.ToArray();
     }
 
-    private static async ValueTask<BackupManifest?> GetManifest(string archivePath)
+    private async ValueTask<BackupManifest?> GetManifest(string archivePath)
     {
+        archivePath = GetBackupArchivePath(archivePath);
         var archiveStream = File.OpenRead(archivePath);
         await using (archiveStream.ConfigureAwait(false))
         {
@@ -563,6 +570,24 @@ public class BackupService : IBackupService
                 return await JsonSerializer.DeserializeAsync<BackupManifest>(manifestStream, _serializerSettings).ConfigureAwait(false);
             }
         }
+    }
+
+    private string GetBackupArchivePath(string archivePath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(archivePath);
+
+        var backupRoot = Path.GetFullPath(_applicationPaths.BackupPath);
+        var fullArchivePath = Path.GetFullPath(archivePath);
+        var relativePath = Path.GetRelativePath(backupRoot, fullArchivePath);
+        if (relativePath == "."
+            || Path.IsPathRooted(relativePath)
+            || relativePath == ".."
+            || relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Backup archives must be located in the backup directory.");
+        }
+
+        return fullArchivePath;
     }
 
     private static BackupManifestDto Map(BackupManifest manifest, string path)

@@ -998,8 +998,8 @@ namespace Jellyfin.LiveTv.Listings
             {
                 _logger.LogWarning(
                     "Schedules Direct has no lineups for country {Country} and postal code {PostalCode}",
-                    country,
-                    location);
+                    country.ReplaceLineEndings(string.Empty),
+                    location.ReplaceLineEndings(string.Empty));
             }
 
             return lineups;
@@ -1328,12 +1328,14 @@ namespace Jellyfin.LiveTv.Listings
             var hashedPasswordBytes = SHA1.HashData(Encoding.ASCII.GetBytes(password));
 #pragma warning restore CA5350
             string hashedPassword = Convert.ToHexStringLower(hashedPasswordBytes);
-            options.Content = new StringContent("{\"username\":\"" + username + "\",\"password\":\"" + hashedPassword + "\"}", Encoding.UTF8, MediaTypeNames.Application.Json);
+            options.Content = JsonContent.Create(
+                new TokenRequestDto { Username = username, Password = hashedPassword },
+                options: _jsonOptions);
 
             var root = await Request<TokenDto>(options, false, null, cancellationToken).ConfigureAwait(false);
             if (string.Equals(root?.Message, "OK", StringComparison.Ordinal))
             {
-                _logger.LogInformation("Authenticated with Schedules Direct token: {Token}", root.Token);
+                _logger.LogInformation("Authenticated with Schedules Direct");
                 return root.Token;
             }
 
@@ -1347,7 +1349,7 @@ namespace Jellyfin.LiveTv.Listings
             ArgumentException.ThrowIfNullOrEmpty(token);
             ArgumentException.ThrowIfNullOrEmpty(info.ListingsId);
 
-            _logger.LogInformation("Adding new lineup {Id}", info.ListingsId);
+            _logger.LogInformation("Adding new lineup {Id}", info.ListingsId.ReplaceLineEndings(string.Empty));
 
             using var message = new HttpRequestMessage(HttpMethod.Put, ApiUrl + "/lineups/" + info.ListingsId);
             message.Headers.TryAddWithoutValidation("token", token);
@@ -1368,9 +1370,9 @@ namespace Jellyfin.LiveTv.Listings
 
                 _logger.LogError(
                     "Error adding lineup {Id} to account, SD code {SdCode}: {Response}",
-                    info.ListingsId,
+                    info.ListingsId.ReplaceLineEndings(string.Empty),
                     sdCode?.ToString() ?? errorCode?.ToString(CultureInfo.InvariantCulture) ?? "N/A",
-                    responseBody);
+                    responseBody.ReplaceLineEndings(string.Empty));
 
                 // Reporting success here leaves the user with a listings provider that silently
                 // has no lineup, so the failure has to surface.

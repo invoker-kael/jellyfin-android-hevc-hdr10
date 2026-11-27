@@ -248,7 +248,9 @@ public class PlaystateController : BaseJellyfinApiController
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<ActionResult> ReportPlaybackStopped([FromBody] PlaybackStopInfo playbackStopInfo)
     {
-        _logger.LogDebug("ReportPlaybackStopped PlaySessionId: {0}", playbackStopInfo.PlaySessionId ?? string.Empty);
+        _logger.LogDebug(
+            "ReportPlaybackStopped PlaySessionId: {0}",
+            playbackStopInfo.PlaySessionId?.ReplaceLineEndings(string.Empty) ?? string.Empty);
         if (!string.IsNullOrWhiteSpace(playbackStopInfo.PlaySessionId))
         {
             await _transcodeManager.KillTranscodingJobs(User.GetDeviceId()!, playbackStopInfo.PlaySessionId, s => true).ConfigureAwait(false);
@@ -464,7 +466,9 @@ public class PlaystateController : BaseJellyfinApiController
             NextMediaType = nextMediaType
         };
 
-        _logger.LogDebug("ReportPlaybackStopped PlaySessionId: {0}", playbackStopInfo.PlaySessionId ?? string.Empty);
+        _logger.LogDebug(
+            "ReportPlaybackStopped PlaySessionId: {0}",
+            playbackStopInfo.PlaySessionId?.ReplaceLineEndings(string.Empty) ?? string.Empty);
         if (!string.IsNullOrWhiteSpace(playbackStopInfo.PlaySessionId))
         {
             await _transcodeManager.KillTranscodingJobs(User.GetDeviceId()!, playbackStopInfo.PlaySessionId, s => true).ConfigureAwait(false);
