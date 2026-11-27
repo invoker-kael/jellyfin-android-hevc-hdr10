@@ -270,7 +270,7 @@ namespace MediaBrowser.Providers.Subtitles
                             counter++;
                         }
 
-                        _logger.LogInformation("Saving subtitles to {SavePath}", path);
+                        _logger.LogInformation("Saving subtitles to {SavePath}", path.ReplaceLineEndings(string.Empty));
                         _monitor.ReportFileSystemChangeBeginning(path);
 
                         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? throw new InvalidOperationException("Path can't be a root directory."));

@@ -17,6 +17,24 @@ namespace Jellyfin.LiveTv.Tests.SchedulesDirect
             _jsonOptions = JsonDefaults.Options;
         }
 
+        [Fact]
+        public void Serialize_Token_Request_Escapes_Username()
+        {
+            var username = "account\"\\\r\nname";
+            var request = new TokenRequestDto
+            {
+                Username = username,
+                Password = "hashed-password"
+            };
+
+            var requestJson = JsonSerializer.Serialize(request, _jsonOptions);
+            var deserialized = JsonSerializer.Deserialize<TokenRequestDto>(requestJson, _jsonOptions);
+
+            Assert.NotNull(deserialized);
+            Assert.Equal(username, deserialized!.Username);
+            Assert.Equal("hashed-password", deserialized.Password);
+        }
+
         /// <summary>
         /// /token response.
         /// </summary>

@@ -2,9 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Security.Claims;
 using System.Threading.Tasks;
 using AutoFixture.Xunit3;
+using Jellyfin.Api.Constants;
 using Jellyfin.Api.Controllers;
+using Jellyfin.Api.Models.UserDtos;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Configuration;
@@ -15,6 +18,7 @@ using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Controller.QuickConnect;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Users;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -107,6 +111,64 @@ public class UserControllerTests
             v.MemberNames.Contains("AuthenticationProviderId") &&
             v.ErrorMessage is not null &&
             v.ErrorMessage.Contains("required", StringComparison.CurrentCultureIgnoreCase));
+    }
+
+    [Fact]
+    public async Task UpdateUserPassword_ResetPasswordRequiresAdministrator()
+    {
+        var userId = Guid.NewGuid();
+        var user = new User("test-user", "test-authentication", "test-password-reset");
+        user.Id = userId;
+        user.EnableUserPreferenceAccess = true;
+        _mockUserManager
+            .Setup(m => m.GetUserById(userId))
+            .Returns(user);
+        SetCurrentUser(userId, false);
+
+        var result = await _subject.UpdateUserPassword(null, new UpdateUserPassword { ResetPassword = true });
+
+        Assert.IsType<ForbidResult>(result);
+        _mockUserManager.Verify(m => m.ResetPassword(userId), Times.Never);
+    }
+
+    [Fact]
+    public async Task UpdateUserPassword_AdministratorCanResetPassword()
+    {
+        var userId = Guid.NewGuid();
+        var user = new User("test-user", "test-authentication", "test-password-reset");
+        user.Id = userId;
+        _mockUserManager
+            .Setup(m => m.GetUserById(userId))
+            .Returns(user);
+        _mockUserManager
+            .Setup(m => m.ResetPassword(userId))
+            .Returns(Task.CompletedTask);
+        SetCurrentUser(userId, true);
+
+        var result = await _subject.UpdateUserPassword(null, new UpdateUserPassword { ResetPassword = true });
+
+        Assert.IsType<NoContentResult>(result);
+        _mockUserManager.Verify(m => m.ResetPassword(userId), Times.Once);
+    }
+
+    private void SetCurrentUser(Guid userId, bool isAdministrator)
+    {
+        var claims = new List<Claim>
+        {
+            new(InternalClaimTypes.UserId, userId.ToString())
+        };
+        if (isAdministrator)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, UserRoles.Administrator));
+        }
+
+        _subject.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"))
+            }
+        };
     }
 
     private List<ValidationResult> Validate(object model)

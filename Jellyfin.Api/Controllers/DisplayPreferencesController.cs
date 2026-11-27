@@ -202,7 +202,7 @@ public class DisplayPreferencesController : BaseJellyfinApiController
 
             if (!Enum.TryParse<ViewType>(viewType, true, out _))
             {
-                _logger.LogError("Invalid ViewType: {LandingScreenOption}", viewType);
+                _logger.LogError("Invalid ViewType: {LandingScreenOption}", viewType.ReplaceLineEndings(string.Empty));
                 displayPreferences.CustomPrefs.Remove(key);
             }
         }

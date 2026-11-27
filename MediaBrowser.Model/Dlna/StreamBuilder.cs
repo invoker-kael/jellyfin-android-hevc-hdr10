@@ -444,9 +444,9 @@ namespace MediaBrowser.Model.Dlna
             {
                 _logger.LogDebug(
                     "Profile: {0}, No audio direct play profiles found for {1} with codec {2}",
-                    options.Profile.Name ?? "Unknown Profile",
-                    item.Path ?? "Unknown path",
-                    audioStream.Codec ?? "Unknown codec");
+                    options.Profile.Name?.ReplaceLineEndings(string.Empty) ?? "Unknown Profile",
+                    item.Path?.ReplaceLineEndings(string.Empty) ?? "Unknown path",
+                    audioStream.Codec?.ReplaceLineEndings(string.Empty) ?? "Unknown codec");
 
                 var directStreamProfile = options.Profile.DirectPlayProfiles
                     .FirstOrDefault(x => x.Type == DlnaProfileType.Audio && IsAudioDirectStreamSupported(x, item, audioStream));
@@ -735,8 +735,8 @@ namespace MediaBrowser.Model.Dlna
 
             _logger.LogDebug(
                 "Profile: {0}, Path: {1}, isEligibleForDirectPlay: {2}, isEligibleForDirectStream: {3}",
-                options.Profile.Name ?? "Unknown Profile",
-                item.Path ?? "Unknown path",
+                options.Profile.Name?.ReplaceLineEndings(string.Empty) ?? "Unknown Profile",
+                item.Path?.ReplaceLineEndings(string.Empty) ?? "Unknown path",
                 isEligibleForDirectPlay,
                 isEligibleForDirectStream);
 
@@ -791,8 +791,8 @@ namespace MediaBrowser.Model.Dlna
 
                 _logger.LogDebug(
                     "DirectPlay Result for Profile: {0}, Path: {1}, PlayMethod: {2}, AudioStreamIndex: {3}, SubtitleStreamIndex: {4}, Reasons: {5}",
-                    options.Profile.Name ?? "Anonymous Profile",
-                    item.Path ?? "Unknown path",
+                    options.Profile.Name?.ReplaceLineEndings(string.Empty) ?? "Anonymous Profile",
+                    item.Path?.ReplaceLineEndings(string.Empty) ?? "Unknown path",
                     directPlayInfo.PlayMethod,
                     directPlayInfo.AudioStreamIndex ?? audioStream?.Index,
                     playlistItem.SubtitleStreamIndex,
@@ -832,13 +832,13 @@ namespace MediaBrowser.Model.Dlna
 
             _logger.LogDebug(
                 "StreamBuilder.BuildVideoItem( Profile={0}, Path={1}, AudioStreamIndex={2}, SubtitleStreamIndex={3} ) => ( PlayMethod={4}, TranscodeReason={5} ) {6}",
-                options.Profile.Name ?? "Anonymous Profile",
-                item.Path ?? "Unknown path",
+                options.Profile.Name?.ReplaceLineEndings(string.Empty) ?? "Anonymous Profile",
+                item.Path?.ReplaceLineEndings(string.Empty) ?? "Unknown path",
                 options.AudioStreamIndex,
                 options.SubtitleStreamIndex,
                 playlistItem.PlayMethod,
                 playlistItem.TranscodeReasons,
-                playlistItem.ToUrl("media:", "<token>", null));
+                playlistItem.ToUrl("media:", "<token>", null).ReplaceLineEndings(string.Empty));
 
             item.Container = NormalizeMediaSourceFormatIntoSingleContainer(item.Container, options.Profile, DlnaProfileType.Video, directPlayProfile);
             return playlistItem;
@@ -1144,8 +1144,8 @@ namespace MediaBrowser.Model.Dlna
 
             _logger.LogDebug(
                 "Transcode Result for Profile: {Profile}, Path: {Path}, PlayMethod: {PlayMethod}, AudioStreamIndex: {AudioStreamIndex}, SubtitleStreamIndex: {SubtitleStreamIndex}, Reasons: {TranscodeReason}",
-                options.Profile.Name ?? "Anonymous Profile",
-                item.Path ?? "Unknown path",
+                options.Profile.Name?.ReplaceLineEndings(string.Empty) ?? "Anonymous Profile",
+                item.Path?.ReplaceLineEndings(string.Empty) ?? "Unknown path",
                 playlistItem.PlayMethod,
                 audioStream?.Index,
                 playlistItem.SubtitleStreamIndex,
@@ -1443,12 +1443,12 @@ namespace MediaBrowser.Model.Dlna
             _logger.LogDebug(
                 "Profile: {0}, DirectPlay=false. Reason={1}.{2} Condition: {3}. ConditionValue: {4}. IsRequired: {5}. Path: {6}",
                 type,
-                profile.Name ?? "Unknown Profile",
+                profile.Name?.ReplaceLineEndings(string.Empty) ?? "Unknown Profile",
                 condition.Property,
                 condition.Condition,
-                condition.Value ?? string.Empty,
+                condition.Value?.ReplaceLineEndings(string.Empty) ?? string.Empty,
                 condition.IsRequired,
-                mediaSource.Path ?? "Unknown path");
+                mediaSource.Path?.ReplaceLineEndings(string.Empty) ?? "Unknown path");
         }
 
         /// <summary>

@@ -156,7 +156,7 @@ public class LyricManager : ILyricManager
             var response = await InternalGetRemoteLyricsAsync(lyricId, cancellationToken).ConfigureAwait(false);
             if (response is null)
             {
-                _logger.LogDebug("Unable to download lyrics for {LyricId}", lyricId);
+                _logger.LogDebug("Unable to download lyrics for {LyricId}", lyricId.ReplaceLineEndings(string.Empty));
                 return null;
             }
 

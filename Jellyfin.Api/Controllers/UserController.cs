@@ -290,6 +290,11 @@ public class UserController : BaseJellyfinApiController
 
         if (request.ResetPassword)
         {
+            if (!User.IsInRole(UserRoles.Administrator))
+            {
+                return Forbid();
+            }
+
             await _userManager.ResetPassword(user.Id).ConfigureAwait(false);
         }
         else

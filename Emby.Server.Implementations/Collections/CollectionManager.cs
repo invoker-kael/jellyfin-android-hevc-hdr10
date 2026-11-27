@@ -171,7 +171,16 @@ namespace Emby.Server.Implementations.Collections
                 throw new InvalidOperationException("Unable to resolve the collections library folder, so the collection cannot be created.");
             }
 
-            var path = Path.Combine(parentFolder.Path, folderName);
+            var parentPath = Path.GetFullPath(parentFolder.Path);
+            var path = Path.GetFullPath(Path.Combine(parentPath, folderName));
+            var relativePath = Path.GetRelativePath(parentPath, path);
+            if (relativePath == "."
+                || Path.IsPathRooted(relativePath)
+                || relativePath == ".."
+                || relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("Collection name resolves outside its parent directory.", nameof(options));
+            }
 
             _iLibraryMonitor.ReportFileSystemChangeBeginning(path);
 

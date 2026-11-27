@@ -258,10 +258,10 @@ public class ItemLookupController : BaseJellyfinApiController
         }
 
         _logger.LogInformation(
-            "Setting provider id's to item {ItemId}-{ItemName}: {@ProviderIds}",
+            "Setting {ProviderIdCount} provider ids for item {ItemId}-{ItemName}",
+            searchResult.ProviderIds.Count,
             item.Id,
-            item.Name,
-            searchResult.ProviderIds);
+            item.Name?.ReplaceLineEndings(string.Empty) ?? string.Empty);
 
         // Since the refresh process won't erase provider Ids, we need to set this explicitly now.
         item.SetProviderIds(searchResult.ProviderIds);

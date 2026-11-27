@@ -56,18 +56,19 @@ public class BaseUrlRedirectionMiddleware
                 || string.Equals(localPath, "/health/", StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogDebug("Redirecting /health check");
-                httpContext.Response.Redirect(baseUrlPrefix + "/health");
+                var healthTarget = "/" + (baseUrlPrefix + "/health").TrimStart('/', '\\');
+                httpContext.Response.Redirect(healthTarget);
                 return;
             }
 
             // Always redirect back to the default path if the base prefix is invalid or missing
-            _logger.LogDebug("Normalizing an URL at {LocalPath}", localPath);
+            _logger.LogDebug("Normalizing an URL at {LocalPath}", localPath.ReplaceLineEndings(string.Empty));
 
             var port = httpContext.Request.Host.Port ?? -1;
-            var uri = new UriBuilder(httpContext.Request.Scheme, httpContext.Request.Host.Host, port, localPath).Uri;
             var redirectUri = new UriBuilder(httpContext.Request.Scheme, httpContext.Request.Host.Host, port, baseUrlPrefix + "/" + _configuration[DefaultRedirectKey]).Uri;
-            var target = uri.MakeRelativeUri(redirectUri).ToString();
-            _logger.LogDebug("Redirecting to {Target}", target);
+            var target = "/" + redirectUri.PathAndQuery.TrimStart('/', '\\');
+
+            _logger.LogDebug("Redirecting to {Target}", target.ReplaceLineEndings(string.Empty));
 
             httpContext.Response.Redirect(target);
             return;

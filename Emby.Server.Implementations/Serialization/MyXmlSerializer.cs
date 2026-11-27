@@ -42,7 +42,12 @@ namespace Emby.Server.Implementations.Serialization
         /// <returns>System.Object.</returns>
         public object? DeserializeFromStream(Type type, Stream stream)
         {
-            using (var reader = XmlReader.Create(stream))
+            var settings = new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null
+            };
+            using (var reader = XmlReader.Create(stream, settings))
             {
                 var netSerializer = GetSerializer(type);
                 return netSerializer.Deserialize(reader);

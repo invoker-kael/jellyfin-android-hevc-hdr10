@@ -127,7 +127,17 @@ namespace Emby.Server.Implementations.Playlists
             }
 
             var user = _userManager.GetUserById(request.UserId);
-            var path = Path.Combine(parentFolder.Path, folderName);
+            var parentPath = Path.GetFullPath(parentFolder.Path);
+            var path = Path.GetFullPath(Path.Combine(parentPath, folderName));
+            var relativePath = Path.GetRelativePath(parentPath, path);
+            if (relativePath == "."
+                || Path.IsPathRooted(relativePath)
+                || relativePath == ".."
+                || relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("Playlist name resolves outside its parent directory.", nameof(request));
+            }
+
             path = GetTargetPath(path);
 
             _iLibraryMonitor.ReportFileSystemChangeBeginning(path);
@@ -338,7 +348,10 @@ namespace Emby.Server.Implementations.Playlists
             var item = playlist.LinkedChildren.FirstOrDefault(i => string.Equals(entryId, i.ItemId?.ToString("N", CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase));
             if (item is null)
             {
-                _logger.LogWarning("Modified item not found in playlist. ItemId: {ItemId}, PlaylistId: {PlaylistId}", entryId, playlistId);
+                _logger.LogWarning(
+                    "Modified item not found in playlist. ItemId: {ItemId}, PlaylistId: {PlaylistId}",
+                    entryId.ReplaceLineEndings(string.Empty),
+                    playlistId);
 
                 return;
             }

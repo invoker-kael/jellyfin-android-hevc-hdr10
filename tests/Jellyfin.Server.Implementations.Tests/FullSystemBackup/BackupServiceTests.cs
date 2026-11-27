@@ -72,6 +72,16 @@ public sealed class BackupServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetBackupManifest_WhenArchiveIsOutsideBackupDirectory_ThrowsUnauthorizedAccessException()
+    {
+        var backupService = CreateBackupService();
+        var outsidePath = Path.Combine(_testRoot, "outside.zip");
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => backupService.GetBackupManifest(outsidePath));
+    }
+
+    [Fact]
     public async Task CreateBackupAsync_WithCorruptKeyframeDataRow_SkipsRowAndCompletesBackup()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

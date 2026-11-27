@@ -447,7 +447,7 @@ namespace Emby.Server.Implementations.Localization
             {
                 _logger.LogWarning(
                     "None of the ratings in '{Rating}' were found in a known rating system, treating as unrated",
-                    rating);
+                    rating.ReplaceLineEndings(string.Empty));
             }
 
             return null;

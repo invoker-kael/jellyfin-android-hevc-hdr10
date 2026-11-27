@@ -1,6 +1,5 @@
 using System.Net;
 using System.Threading.Tasks;
-using System.Web;
 using MediaBrowser.Common.Extensions;
 using MediaBrowser.Common.Net;
 using Microsoft.AspNetCore.Http;
@@ -50,8 +49,7 @@ public class IPBasedAccessValidationMiddleware
             // No access from network, respond with 503 instead of 200.
             _logger.LogWarning(
                 "Blocking request to {Path} by {RemoteIP} due to IP filtering rule, reason: {Reason}",
-                // url-encode to block log injection
-                HttpUtility.UrlEncode(httpContext.Request.Path),
+                httpContext.Request.Path.ToString().ReplaceLineEndings(string.Empty),
                 remoteIP,
                 result);
             httpContext.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;

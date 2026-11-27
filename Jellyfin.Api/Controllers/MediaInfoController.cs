@@ -135,7 +135,7 @@ public class MediaInfoController : BaseJellyfinApiController
         [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] PlaybackInfoDto? playbackInfoDto)
     {
         var profile = playbackInfoDto?.DeviceProfile;
-        _logger.LogDebug("GetPostedPlaybackInfo profile: {@Profile}", profile);
+        _logger.LogDebug("GetPostedPlaybackInfo received a device profile.");
 
         if (profile is null)
         {

@@ -615,8 +615,8 @@ namespace Jellyfin.Server.Implementations.Users
                 {
                     _logger.LogInformation(
                         "Authentication request for {UserName} has been denied (IP: {IP}).",
-                        username,
-                        remoteEndPoint);
+                        username.ReplaceLineEndings(string.Empty),
+                        remoteEndPoint.ReplaceLineEndings(string.Empty));
                     throw new AuthenticationException("Invalid username or password entered.");
                 }
 

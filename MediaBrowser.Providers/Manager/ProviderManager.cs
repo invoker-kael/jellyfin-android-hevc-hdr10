@@ -829,7 +829,10 @@ namespace MediaBrowser.Providers.Manager
 
             foreach (var saver in applicableSavers)
             {
-                _logger.LogDebug("Saving {Item} to {Saver}", item.Path ?? item.Name, saver.Name);
+                _logger.LogDebug(
+                    "Saving {Item} to {Saver}",
+                    item.Path?.ReplaceLineEndings(string.Empty) ?? item.Name?.ReplaceLineEndings(string.Empty) ?? "Unknown item",
+                    saver.Name.ReplaceLineEndings(string.Empty));
 
                 if (saver is IMetadataFileSaver fileSaver)
                 {
@@ -1360,7 +1363,9 @@ namespace MediaBrowser.Providers.Manager
                 _metadataProviderCache.TryRemove(key, out _);
             }
 
-            _logger.LogDebug("Invalidated metadata provider cache for library: {LibraryPath}", e.LibraryPath);
+            _logger.LogDebug(
+                "Invalidated metadata provider cache for library: {LibraryPath}",
+                e.LibraryPath?.ReplaceLineEndings(string.Empty) ?? string.Empty);
         }
 
         private void OnConfigurationUpdated(object? sender, EventArgs e)
