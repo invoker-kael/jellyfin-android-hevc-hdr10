@@ -5,7 +5,7 @@ namespace Jellyfin.LiveTv.Listings.SchedulesDirectDtos
     /// <summary>
     /// The request body used to authenticate with Schedules Direct.
     /// </summary>
-    public class TokenRequestDto
+    internal sealed class TokenRequestDto
     {
         /// <summary>
         /// Gets or sets the account username.
