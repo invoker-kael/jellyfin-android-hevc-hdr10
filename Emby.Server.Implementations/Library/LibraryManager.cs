@@ -3891,22 +3891,28 @@ namespace Emby.Server.Implementations.Library
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                var personName = person.Name;
+                if (personName is null)
+                {
+                    continue;
+                }
+
                 var itemUpdateType = ItemUpdateType.MetadataDownload;
                 var saveEntity = false;
-                var personEntity = GetPerson(person.Name);
+                var personEntity = GetPerson(personName);
 
                 if (personEntity is null)
                 {
                     try
                     {
-                        personEntity = GetOrCreatePerson(person.Name);
+                        personEntity = GetOrCreatePerson(personName);
                         saveEntity = true;
                     }
                     catch (Exception ex)
                     {
                         _logger.LogWarning(
                             "Failed to create person {Name}. Exception: {Exception}",
-                            person.Name?.ReplaceLineEndings(string.Empty) ?? string.Empty,
+                            personName.ReplaceLineEndings(string.Empty),
                             ex.ToString().ReplaceLineEndings(string.Empty));
                         continue;
                     }
