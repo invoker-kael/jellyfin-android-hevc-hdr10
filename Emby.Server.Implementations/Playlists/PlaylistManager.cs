@@ -351,7 +351,7 @@ namespace Emby.Server.Implementations.Playlists
                 _logger.LogWarning(
                     "Modified item not found in playlist. ItemId: {ItemId}, PlaylistId: {PlaylistId}",
                     entryId.ReplaceLineEndings(string.Empty),
-                    playlistId);
+                    playlistId.ReplaceLineEndings(string.Empty));
 
                 return;
             }
